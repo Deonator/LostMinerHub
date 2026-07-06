@@ -25,7 +25,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 # ──────────────────────────────────────────
-# FSM: Создание сервера
+# FSM
 # ──────────────────────────────────────────
 class CreateServer(StatesGroup):
     name = State()
@@ -34,11 +34,14 @@ class CreateServer(StatesGroup):
     password = State()
 
 
+class ChangePassword(StatesGroup):
+    waiting = State()
+
+
 # ──────────────────────────────────────────
 # Утилиты
 # ──────────────────────────────────────────
 def e(text: str) -> str:
-    """Экранирует HTML-спецсимволы в пользовательском контенте."""
     return html.escape(str(text))
 
 
@@ -46,12 +49,37 @@ def status_badge(online: int) -> str:
     return "🟢 Онлайн" if online else "⚫ Оффлайн"
 
 
+def status_label(status: str) -> str:
+    return {"pending": "⏳ На модерации", "approved": "✅ Одобрен", "rejected": "❌ Отклонён"}.get(status, status)
+
+
 async def notify_owner(owner_id: int, text: str):
-    """Отправляет уведомление владельцу; молча проглатывает ошибки (бот заблокирован и т.п.)."""
     try:
         await bot.send_message(owner_id, text, parse_mode="HTML")
     except Exception as exc:
-        logger.warning("Не удалось уведомить пользователя %s: %s", owner_id, exc)
+        logger.warning("Не удалось уведомить %s: %s", owner_id, exc)
+
+
+def server_card(s) -> str:
+    """Форматирует карточку сервера для показа владельцу."""
+    return (
+        f"🖥 <b>{e(s['name'])}</b>\n"
+        f"📝 {e(s['description'])}\n"
+        f"🌐 <code>{e(s['ip'])}</code>\n"
+        f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
+        f"📋 Статус: {status_label(s['status'])}\n"
+        f"📶 {status_badge(s['online'])}"
+    )
+
+
+def manage_keyboard(server_id: int, online: int) -> InlineKeyboardMarkup:
+    """Клавиатура управления сервером."""
+    toggle_text = "⚫ Выключить" if online else "🟢 Включить на 1 час"
+    toggle_cb = f"srv:off:{server_id}" if online else f"srv:on:{server_id}"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Изменить пароль", callback_data=f"srv:pwd:{server_id}")],
+        [InlineKeyboardButton(text=toggle_text, callback_data=toggle_cb)],
+    ])
 
 
 # ──────────────────────────────────────────
@@ -65,7 +93,7 @@ async def cmd_start(message: Message):
         "📋 <b>Команды:</b>\n"
         "/серверы — список серверов\n"
         "/создать — добавить свой сервер\n"
-        "/включить — включить сервер на 1 час\n\n"
+        "/мой_сервер — управление своим сервером\n\n"
         "Используй команды в меню или пиши их вручную.",
         parse_mode="HTML",
     )
@@ -100,6 +128,15 @@ async def cmd_servers(message: Message):
 @dp.message(Command("создать"))
 async def cmd_create(message: Message, state: FSMContext):
     await db.register_user(message.from_user.id, message.from_user.username)
+
+    existing = await db.get_any_server_by_owner(message.from_user.id)
+    if existing:
+        await message.answer(
+            "❌ У тебя уже есть сервер. Создать можно только один.\n\n"
+            "Управляй им через /мой_сервер"
+        )
+        return
+
     await state.set_state(CreateServer.name)
     await message.answer(
         "🛠 <b>Создание сервера</b>\n\n"
@@ -132,7 +169,7 @@ async def create_description(message: Message, state: FSMContext):
         return
     await state.update_data(description=message.text)
     await state.set_state(CreateServer.ip)
-    await message.answer("Шаг 3/5 — Введи <b>IP-адрес</b> сервера:", parse_mode="HTML")
+    await message.answer("Шаг 3/4 — Введи <b>IP-адрес</b> сервера:", parse_mode="HTML")
 
 
 @dp.message(CreateServer.ip)
@@ -150,7 +187,7 @@ async def create_ip(message: Message, state: FSMContext):
 
 
 @dp.message(CreateServer.password)
-async def create_password(message: Message, state: FSMContext):
+async def create_password_step(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ Пожалуйста, отправь текст.")
         return
@@ -177,69 +214,130 @@ async def create_password(message: Message, state: FSMContext):
         parse_mode="HTML",
     )
 
-    # Уведомляем администратора (ошибки не прерывают основной флоу)
     await notify_owner(
         ADMIN_ID,
         f"🔔 <b>Новый сервер на модерации!</b>\n\n"
         f"📛 {e(data['name'])}\n"
         f"🌐 <code>{e(data['ip'])}</code>\n\n"
-        f"Используй /админ для проверки.",
+        "Используй /админ для проверки.",
     )
 
 
 # ──────────────────────────────────────────
-# /включить — включить свой сервер на 1 час
+# /мой_сервер — управление своим сервером
 # ──────────────────────────────────────────
-@dp.message(Command("включить"))
-async def cmd_enable(message: Message):
-    servers = await db.get_owner_servers(message.from_user.id)
-    if not servers:
+@dp.message(Command("мой_сервер"))
+async def cmd_my_server(message: Message):
+    server = await db.get_any_server_by_owner(message.from_user.id)
+    if not server:
         await message.answer(
-            "❌ У тебя нет одобренных серверов.\n"
-            "Создай сервер командой /создать."
+            "❌ У тебя нет сервера.\n"
+            "Создай его командой /создать"
         )
         return
 
-    if len(servers) == 1:
-        server = servers[0]
-        await db.set_server_online(server["id"])
-        await message.answer(
-            f"🟢 <b>Сервер «{e(server['name'])}» включён!</b>\n"
-            f"Он будет отображаться онлайн в течение <b>1 часа</b>.",
-            parse_mode="HTML",
-        )
-        return
+    # Актуализируем онлайн-статус через approved-запрос (он сбрасывает просроченные)
+    await db.get_approved_servers()
+    server = await db.get_server_by_id(server["id"])
 
-    # Несколько серверов — показываем выбор
-    buttons = [
-        [InlineKeyboardButton(text=s["name"], callback_data=f"enable:{s['id']}")]
-        for s in servers
-    ]
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("Выбери сервер, который хочешь включить:", reply_markup=kb)
+    text = server_card(server)
+
+    # Кнопки управления показываем только для одобренных серверов
+    if server["status"] == "approved":
+        kb = manage_keyboard(server["id"], server["online"])
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await message.answer(text, parse_mode="HTML")
 
 
-@dp.callback_query(F.data.startswith("enable:"))
-async def cb_enable_server(callback: CallbackQuery):
-    parts = callback.data.split(":", 1)
-    if len(parts) != 2 or not parts[1].isdigit():
+# ──────────────────────────────────────────
+# Callback: управление сервером (srv:*)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("srv:"))
+async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
 
-    server_id = int(parts[1])
+    action = parts[1]
+    server_id = int(parts[2])
     server = await db.get_server_by_id(server_id)
 
     if not server or server["owner_id"] != callback.from_user.id:
         await callback.answer("❌ Нет доступа.", show_alert=True)
         return
 
-    await db.set_server_online(server_id)
-    await callback.message.edit_text(
-        f"🟢 <b>Сервер «{e(server['name'])}» включён!</b>\n"
-        f"Он будет отображаться онлайн в течение <b>1 часа</b>.",
+    # ── Включить ──
+    if action == "on":
+        await db.set_server_online(server_id)
+        server = await db.get_server_by_id(server_id)
+        await callback.message.edit_text(
+            server_card(server),
+            parse_mode="HTML",
+            reply_markup=manage_keyboard(server_id, 1),
+        )
+        await callback.answer("🟢 Сервер включён на 1 час!")
+
+    # ── Выключить ──
+    elif action == "off":
+        await db.set_server_offline(server_id)
+        server = await db.get_server_by_id(server_id)
+        await callback.message.edit_text(
+            server_card(server),
+            parse_mode="HTML",
+            reply_markup=manage_keyboard(server_id, 0),
+        )
+        await callback.answer("⚫ Сервер выключен.")
+
+    # ── Изменить пароль ──
+    elif action == "pwd":
+        await state.update_data(manage_server_id=server_id)
+        await state.set_state(ChangePassword.waiting)
+        await callback.message.answer(
+            "🔑 Введи новый пароль для сервера\n"
+            "(или напиши <code>нет</code>, чтобы убрать пароль):\n\n"
+            "<i>Для отмены напиши /отмена</i>",
+            parse_mode="HTML",
+        )
+        await callback.answer()
+
+    else:
+        await callback.answer("❌ Неизвестное действие.", show_alert=True)
+
+
+@dp.message(ChangePassword.waiting)
+async def change_password_step(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Пожалуйста, отправь текст.")
+        return
+
+    data = await state.get_data()
+    server_id = data.get("manage_server_id")
+    if not server_id:
+        await state.clear()
+        await message.answer("❌ Что-то пошло не так. Попробуй снова через /мой_сервер")
+        return
+
+    server = await db.get_server_by_id(server_id)
+    if not server or server["owner_id"] != message.from_user.id:
+        await state.clear()
+        await message.answer("❌ Нет доступа.")
+        return
+
+    new_password = message.text.strip()
+    if new_password.lower() == "нет":
+        new_password = ""
+
+    await db.update_server_password(server_id, new_password)
+    await state.clear()
+
+    display = f"<code>{e(new_password)}</code>" if new_password else "нет"
+    await message.answer(
+        f"✅ Пароль обновлён: {display}\n\n"
+        "Управление сервером: /мой_сервер",
         parse_mode="HTML",
     )
-    await callback.answer()
 
 
 # ──────────────────────────────────────────
@@ -267,16 +365,10 @@ async def cmd_admin(message: Message):
             f"👤 Владелец: <code>{s['owner_id']}</code>\n"
             f"🕐 Создан: {s['created_at']}"
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Одобрить", callback_data=f"mod:approve:{s['id']}"
-                ),
-                InlineKeyboardButton(
-                    text="❌ Отклонить", callback_data=f"mod:reject:{s['id']}"
-                ),
-            ]
-        ])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"mod:approve:{s['id']}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod:reject:{s['id']}"),
+        ]])
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
@@ -305,7 +397,7 @@ async def cb_moderate(callback: CallbackQuery):
         owner_text = (
             f"✅ <b>Ваш сервер «{e(server['name'])}» одобрен!</b>\n"
             f"Теперь он виден в списке /серверы\n"
-            f"Включите его командой /включить"
+            f"Управляйте им через /мой_сервер"
         )
     else:
         await db.set_server_status(server_id, "rejected")
@@ -317,12 +409,11 @@ async def cb_moderate(callback: CallbackQuery):
 
     await callback.message.edit_text(result_text, parse_mode="HTML")
     await callback.answer()
-
     await notify_owner(server["owner_id"], owner_text)
 
 
 # ──────────────────────────────────────────
-# /отмена — выход из FSM
+# /отмена — выход из любого FSM
 # ──────────────────────────────────────────
 @dp.message(Command("отмена"))
 async def cmd_cancel(message: Message, state: FSMContext):
@@ -331,7 +422,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
         await message.answer("Нечего отменять.")
         return
     await state.clear()
-    await message.answer("🚫 Создание сервера отменено.")
+    await message.answer("🚫 Действие отменено.")
 
 
 # ──────────────────────────────────────────
@@ -339,7 +430,6 @@ async def cmd_cancel(message: Message, state: FSMContext):
 # ──────────────────────────────────────────
 async def main():
     await db.init_db()
-    # Снимаем вебхук, если был установлен ранее
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🤖 LostMiner бот запущен!")
     await dp.start_polling(bot)

@@ -3,15 +3,7 @@ import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "lostminer.db")
 
-# Параметры для повышения надёжности при параллельных запросах
 CONNECT_KWARGS = {"timeout": 10}
-
-
-async def _get_db():
-    db = await aiosqlite.connect(DB_PATH, **CONNECT_KWARGS)
-    await db.execute("PRAGMA journal_mode=WAL")
-    db.row_factory = aiosqlite.Row
-    return db
 
 
 async def init_db():
@@ -59,6 +51,18 @@ async def get_user(telegram_id: int):
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
+        ) as cursor:
+            return await cursor.fetchone()
+
+
+async def get_any_server_by_owner(owner_id: int):
+    """Любой сервер пользователя (любой статус). Для проверки лимита 1 сервер на юзера."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC LIMIT 1",
+            (owner_id,),
         ) as cursor:
             return await cursor.fetchone()
 
@@ -140,6 +144,26 @@ async def set_server_online(server_id: int):
                expires_at = datetime('now', '+1 hour')
                WHERE id = ?""",
             (server_id,),
+        )
+        await db.commit()
+
+
+async def set_server_offline(server_id: int):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE servers SET online = 0, expires_at = NULL WHERE id = ?",
+            (server_id,),
+        )
+        await db.commit()
+
+
+async def update_server_password(server_id: int, password: str):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE servers SET password = ? WHERE id = ?",
+            (password, server_id),
         )
         await db.commit()
 
