@@ -54,22 +54,20 @@ def status_label(status: str) -> str:
     return {"pending": "⏳ На модерации", "approved": "✅ Одобрен", "rejected": "❌ Отклонён"}.get(status, status)
 
 
-async def notify_owner(owner_id: int, text: str, reply_markup=None):
+async def notify_user(user_id: int, text: str, reply_markup=None):
     try:
-        await bot.send_message(owner_id, text, parse_mode="HTML", reply_markup=reply_markup)
+        await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except Exception as exc:
-        logger.warning("Не удалось уведомить %s: %s", owner_id, exc)
+        logger.warning("Не удалось уведомить %s: %s", user_id, exc)
 
 
 def time_left(expires_at: str | None) -> str:
-    """Возвращает строку с оставшимся временем до выключения."""
     if not expires_at:
         return ""
     try:
         exp = datetime.fromisoformat(expires_at).replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
-        delta = exp - now
-        total = int(delta.total_seconds())
+        total = int((exp - now).total_seconds())
         if total <= 0:
             return "менее минуты"
         h, rem = divmod(total, 3600)
@@ -87,7 +85,7 @@ def time_left(expires_at: str | None) -> str:
 
 
 def server_card(s) -> str:
-    """Форматирует карточку сервера для показа владельцу."""
+    """Карточка сервера для владельца (пароль виден)."""
     online_line = status_badge(s['online'])
     if s['online'] and s['expires_at']:
         left = time_left(s['expires_at'])
@@ -103,8 +101,18 @@ def server_card(s) -> str:
     )
 
 
+def public_server_card(s) -> str:
+    """Публичная карточка сервера (пароль скрыт)."""
+    return (
+        f"🖥 <b>{e(s['name'])}</b>\n"
+        f"📝 {e(s['description'])}\n"
+        f"🌐 <code>{e(s['ip'])}</code>\n"
+        f"🔑 Пароль: {'🔒 скрыт' if s['password'] else 'нет'}\n"
+        f"📶 {status_badge(s['online'])}"
+    )
+
+
 def manage_keyboard(server_id: int, online: int) -> InlineKeyboardMarkup:
-    """Клавиатура управления одобренным сервером."""
     toggle_text = "⚫ Выключить" if online else "🟢 Включить на 1 час"
     toggle_cb = f"srv:off:{server_id}" if online else f"srv:on:{server_id}"
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -115,20 +123,27 @@ def manage_keyboard(server_id: int, online: int) -> InlineKeyboardMarkup:
 
 
 def delete_keyboard(server_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"srv:delconfirm:{server_id}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data=f"srv:delcancel:{server_id}"),
-        ],
-    ])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"srv:delconfirm:{server_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"srv:delcancel:{server_id}"),
+    ]])
 
 
 def rejected_keyboard(server_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для отклонённого сервера — только удаление."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
     ])
+
+
+def public_server_keyboard(server_id: int, subscribed: bool, has_password: bool) -> InlineKeyboardMarkup:
+    """Кнопки под публичной карточкой сервера."""
+    sub_text = "🔕 Отписаться" if subscribed else "🔔 Подписаться"
+    rows = [
+        [InlineKeyboardButton(text=sub_text, callback_data=f"sub:{server_id}")],
+    ]
+    if has_password:
+        rows.append([InlineKeyboardButton(text="🔑 Узнать пароль", callback_data=f"getpwd:{server_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ──────────────────────────────────────────
@@ -137,6 +152,8 @@ def rejected_keyboard(server_id: int) -> InlineKeyboardMarkup:
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await db.register_user(message.from_user.id, message.from_user.username)
+    is_admin = message.from_user.id == ADMIN_ID
+    admin_block = "\n🔐 <b>Администрирование</b>\n/админ — модерация серверов\n/логи — журнал событий\n" if is_admin else ""
     await message.answer(
         "👋 Добро пожаловать в <b>LostMiner</b> — каталог игровых серверов!\n\n"
         "📋 <b>Команды:</b>\n\n"
@@ -146,8 +163,9 @@ async def cmd_start(message: Message):
         "/создать — добавить свой сервер\n"
         "/мой_сервер — управление сервером (вкл/выкл, пароль)\n\n"
         "🔧 <b>Прочее</b>\n"
-        "/отмена — отменить текущее действие\n\n"
-        "<i>Используй команды в меню или пиши их вручную.</i>",
+        "/отмена — отменить текущее действие\n"
+        + admin_block +
+        "\n<i>Используй команды в меню или пиши их вручную.</i>",
         parse_mode="HTML",
     )
 
@@ -162,17 +180,138 @@ async def cmd_servers(message: Message):
         await message.answer("📭 Пока нет ни одного одобренного сервера.")
         return
 
-    text = "🗂 <b>Список серверов LostMiner:</b>\n\n"
+    await message.answer(f"🗂 <b>Список серверов LostMiner ({len(servers)}):</b>", parse_mode="HTML")
+
+    uid = message.from_user.id
     for s in servers:
-        text += (
-            f"<b>{e(s['name'])}</b>\n"
-            f"📝 {e(s['description'])}\n"
-            f"🌐 <code>{e(s['ip'])}</code>\n"
-            f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
-            f"📶 {status_badge(s['online'])}\n"
-            f"{'─' * 24}\n"
+        is_owner = s["owner_id"] == uid
+        subscribed = False if is_owner else await db.is_subscribed(uid, s["id"])
+        has_pwd = bool(s["password"])
+
+        text = public_server_card(s)
+
+        if is_owner:
+            # Владелец видит только свою карточку без кнопок подписки
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⚙️ Управление", callback_data=f"myserver:{s['id']}")],
+            ])
+        else:
+            kb = public_server_keyboard(s["id"], subscribed, has_pwd)
+
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ──────────────────────────────────────────
+# Callback: кнопка «Управление» из списка серверов
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("myserver:"))
+async def cb_myserver_shortcut(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(
+        "Управляй своим сервером через /мой_сервер",
+    )
+
+
+# ──────────────────────────────────────────
+# Callback: подписка/отписка (sub:<server_id>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("sub:"))
+async def cb_subscribe(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 2 or not parts[1].isdigit():
+        await callback.answer("❌ Некорректные данные.", show_alert=True)
+        return
+
+    server_id = int(parts[1])
+    server = await db.get_server_by_id(server_id)
+    if not server or server["status"] != "approved":
+        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        return
+
+    uid = callback.from_user.id
+
+    if server["owner_id"] == uid:
+        await callback.answer("❌ Нельзя подписаться на свой сервер.", show_alert=True)
+        return
+
+    currently = await db.is_subscribed(uid, server_id)
+
+    if currently:
+        await db.unsubscribe(uid, server_id)
+        await db.add_log("unsubscribed", uid, server_id,
+                         f"@{callback.from_user.username or uid} отписался от «{server['name']}»")
+        await callback.answer("🔕 Вы отписались от сервера.")
+        subscribed = False
+    else:
+        await db.subscribe(uid, server_id)
+        await db.add_log("subscribed", uid, server_id,
+                         f"@{callback.from_user.username or uid} подписался на «{server['name']}»")
+        await callback.answer("🔔 Вы подписались! Получите уведомление когда сервер включится.")
+        subscribed = True
+
+    # Обновляем кнопки под сообщением
+    has_pwd = bool(server["password"])
+    new_kb = public_server_keyboard(server_id, subscribed, has_pwd)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=new_kb)
+    except Exception:
+        pass
+
+
+# ──────────────────────────────────────────
+# Callback: получить пароль (getpwd:<server_id>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("getpwd:"))
+async def cb_get_password(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 2 or not parts[1].isdigit():
+        await callback.answer("❌ Некорректные данные.", show_alert=True)
+        return
+
+    server_id = int(parts[1])
+    server = await db.get_server_by_id(server_id)
+    if not server or server["status"] != "approved":
+        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        return
+
+    if not server["password"]:
+        await callback.answer("У этого сервера нет пароля.", show_alert=True)
+        return
+
+    uid = callback.from_user.id
+    uname = f"@{callback.from_user.username}" if callback.from_user.username else f"id:{uid}"
+
+    # Отправляем пароль только в личку пользователю
+    try:
+        await bot.send_message(
+            uid,
+            f"🔑 Пароль сервера <b>«{e(server['name'])}»</b>:\n"
+            f"<code>{e(server['password'])}</code>\n\n"
+            "<i>Рекомендуем удалить это сообщение после прочтения.</i>",
+            parse_mode="HTML",
         )
-    await message.answer(text, parse_mode="HTML")
+        await callback.answer("✅ Пароль отправлен в личные сообщения.")
+    except Exception:
+        await callback.answer(
+            "❌ Не удалось отправить пароль. Напишите боту в личку и попробуйте снова.",
+            show_alert=True,
+        )
+        return
+
+    # Уведомление владельцу
+    await notify_user(
+        server["owner_id"],
+        f"🔐 <b>Кто-то запросил пароль вашего сервера!</b>\n\n"
+        f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
+        f"👤 Пользователь: {e(uname)}\n"
+        f"🆔 ID: <code>{uid}</code>",
+    )
+
+    # Лог
+    await db.add_log(
+        "password_requested", uid, server_id,
+        f"{uname} запросил пароль сервера «{server['name']}»",
+    )
 
 
 # ──────────────────────────────────────────
@@ -190,7 +329,6 @@ async def cmd_create(message: Message, state: FSMContext):
         )
         return
 
-    # Удаляем старые отклонённые серверы перед созданием нового
     await db.delete_rejected_servers(message.from_user.id)
 
     await state.set_state(CreateServer.name)
@@ -253,7 +391,7 @@ async def create_password_step(message: Message, state: FSMContext):
     if password.lower() == "нет":
         password = ""
 
-    await db.create_server(
+    server_id = await db.create_server(
         owner_id=message.from_user.id,
         name=data["name"],
         description=data["description"],
@@ -261,6 +399,11 @@ async def create_password_step(message: Message, state: FSMContext):
         password=password,
     )
     await state.clear()
+
+    await db.add_log(
+        "server_created", message.from_user.id, server_id,
+        f"@{message.from_user.username or message.from_user.id} создал сервер «{data['name']}»",
+    )
 
     await message.answer(
         "✅ <b>Сервер отправлен на модерацию!</b>\n\n"
@@ -270,7 +413,7 @@ async def create_password_step(message: Message, state: FSMContext):
         parse_mode="HTML",
     )
 
-    await notify_owner(
+    await notify_user(
         ADMIN_ID,
         f"🔔 <b>Новый сервер на модерации!</b>\n\n"
         f"📛 {e(data['name'])}\n"
@@ -292,7 +435,6 @@ async def cmd_my_server(message: Message):
         )
         return
 
-    # Актуализируем онлайн-статус через approved-запрос (он сбрасывает просроченные)
     await db.get_approved_servers()
     server = await db.get_server_by_id(server["id"])
 
@@ -309,7 +451,7 @@ async def cmd_my_server(message: Message):
 
 
 # ──────────────────────────────────────────
-# Callback: управление сервером (srv:*)
+# Callback: управление сервером (srv:*)  — только для владельца
 # ──────────────────────────────────────────
 @dp.callback_query(F.data.startswith("srv:"))
 async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
@@ -331,22 +473,37 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         await db.set_server_online(server_id)
         server = await db.get_server_by_id(server_id)
         await callback.message.edit_text(
-            server_card(server),
-            parse_mode="HTML",
+            server_card(server), parse_mode="HTML",
             reply_markup=manage_keyboard(server_id, 1),
         )
         await callback.answer("🟢 Сервер включён на 1 час!")
+
+        await db.add_log("server_online", callback.from_user.id, server_id,
+                         f"Сервер «{server['name']}» включён владельцем")
+
+        # Уведомление подписчикам
+        subscribers = await db.get_subscribers(server_id)
+        if subscribers:
+            notify_text = (
+                f"🟢 <b>Сервер «{e(server['name'])}» сейчас онлайн!</b>\n\n"
+                f"🌐 <code>{e(server['ip'])}</code>\n"
+                f"🔑 Пароль: {'🔒 скрыт (кнопка в /серверы)' if server['password'] else 'нет'}\n\n"
+                f"⏱ Будет онлайн ещё 1 час."
+            )
+            for uid in subscribers:
+                await notify_user(uid, notify_text)
 
     # ── Выключить ──
     elif action == "off":
         await db.set_server_offline(server_id)
         server = await db.get_server_by_id(server_id)
         await callback.message.edit_text(
-            server_card(server),
-            parse_mode="HTML",
+            server_card(server), parse_mode="HTML",
             reply_markup=manage_keyboard(server_id, 0),
         )
         await callback.answer("⚫ Сервер выключен.")
+        await db.add_log("server_offline", callback.from_user.id, server_id,
+                         f"Сервер «{server['name']}» выключен владельцем")
 
     # ── Изменить пароль ──
     elif action == "pwd":
@@ -364,7 +521,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     elif action == "del":
         await callback.message.edit_text(
             f"🗑 <b>Удалить сервер «{e(server['name'])}»?</b>\n\n"
-            "Это действие необратимо. Сервер будет удалён полностью.",
+            "Это действие необратимо. Все подписчики будут отписаны.",
             parse_mode="HTML",
             reply_markup=delete_keyboard(server_id),
         )
@@ -375,6 +532,8 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         name = server["name"]
         deleted = await db.delete_server(server_id, callback.from_user.id)
         if deleted:
+            await db.add_log("server_deleted", callback.from_user.id, server_id,
+                             f"Сервер «{name}» удалён владельцем")
             await callback.message.edit_text(
                 f"🗑 Сервер <b>«{e(name)}»</b> удалён.\n\n"
                 "Ты можешь создать новый сервер командой /создать",
@@ -423,6 +582,8 @@ async def change_password_step(message: Message, state: FSMContext):
         new_password = ""
 
     await db.update_server_password(server_id, new_password)
+    await db.add_log("password_changed", message.from_user.id, server_id,
+                     f"Пароль сервера «{server['name']}» изменён")
     await state.clear()
 
     display = f"<code>{e(new_password)}</code>" if new_password else "нет"
@@ -434,7 +595,7 @@ async def change_password_step(message: Message, state: FSMContext):
 
 
 # ──────────────────────────────────────────
-# /админ — панель модерации (только для ADMIN_ID)
+# /админ — панель модерации
 # ──────────────────────────────────────────
 @dp.message(Command("админ"))
 async def cmd_admin(message: Message):
@@ -486,14 +647,21 @@ async def cb_moderate(callback: CallbackQuery):
 
     if action == "approve":
         await db.set_server_status(server_id, "approved")
+        await db.add_log("server_approved", callback.from_user.id, server_id,
+                         f"Сервер «{server['name']}» одобрен администратором")
         result_text = f"✅ Сервер <b>«{e(server['name'])}»</b> одобрен."
         owner_text = (
             f"✅ <b>Ваш сервер «{e(server['name'])}» одобрен!</b>\n"
             f"Теперь он виден в списке /серверы\n"
             f"Управляйте им через /мой_сервер"
         )
+        await callback.message.edit_text(result_text, parse_mode="HTML")
+        await callback.answer()
+        await notify_user(server["owner_id"], owner_text)
     else:
         await db.set_server_status(server_id, "rejected")
+        await db.add_log("server_rejected", callback.from_user.id, server_id,
+                         f"Сервер «{server['name']}» отклонён администратором")
         result_text = f"❌ Сервер <b>«{e(server['name'])}»</b> отклонён."
         owner_text = (
             f"❌ <b>Ваш сервер «{e(server['name'])}» отклонён.</b>\n\n"
@@ -502,14 +670,41 @@ async def cb_moderate(callback: CallbackQuery):
         owner_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
         ])
+        await callback.message.edit_text(result_text, parse_mode="HTML")
+        await callback.answer()
+        await notify_user(server["owner_id"], owner_text, reply_markup=owner_kb)
 
-    await callback.message.edit_text(result_text, parse_mode="HTML")
-    await callback.answer()
 
-    if action == "reject":
-        await notify_owner(server["owner_id"], owner_text, reply_markup=owner_kb)
-    else:
-        await notify_owner(server["owner_id"], owner_text)
+# ──────────────────────────────────────────
+# /логи — журнал событий (только для ADMIN_ID)
+# ──────────────────────────────────────────
+@dp.message(Command("логи"))
+async def cmd_logs(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+
+    logs = await db.get_logs(40)
+    if not logs:
+        await message.answer("📋 Журнал пуст.")
+        return
+
+    lines = ["📋 <b>Журнал событий (последние 40):</b>\n"]
+    for log in logs:
+        label = db.LOG_LABELS.get(log["event"], log["event"])
+        dt = str(log["created_at"])[:16]
+        actor = f"id:{log['actor_id']}" if log["actor_id"] else "—"
+        srv = f" | сервер #{log['server_id']}" if log["server_id"] else ""
+        detail = f"\n   └ {e(log['details'])}" if log["details"] else ""
+        lines.append(f"<code>{dt}</code> {label}\n   👤 {actor}{srv}{detail}")
+
+    text = "\n\n".join(lines)
+
+    # Telegram лимит ~4096 символов — режем если нужно
+    if len(text) > 4000:
+        text = text[:3990] + "\n\n<i>...обрезано</i>"
+
+    await message.answer(text, parse_mode="HTML")
 
 
 # ──────────────────────────────────────────

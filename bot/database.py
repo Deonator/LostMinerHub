@@ -32,8 +32,31 @@ async def init_db():
                 FOREIGN KEY (owner_id) REFERENCES users(telegram_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                server_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, server_id),
+                FOREIGN KEY (user_id) REFERENCES users(telegram_id),
+                FOREIGN KEY (server_id) REFERENCES servers(id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event TEXT NOT NULL,
+                actor_id INTEGER,
+                server_id INTEGER,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
+
+# ── Пользователи ──────────────────────────────────────────────────────────────
 
 async def register_user(telegram_id: int, username: str | None):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
@@ -54,6 +77,8 @@ async def get_user(telegram_id: int):
         ) as cursor:
             return await cursor.fetchone()
 
+
+# ── Серверы ───────────────────────────────────────────────────────────────────
 
 async def get_any_server_by_owner(owner_id: int):
     """Любой сервер пользователя (любой статус). Для /мой_сервер."""
@@ -79,33 +104,17 @@ async def get_active_server_by_owner(owner_id: int):
             return await cursor.fetchone()
 
 
-async def delete_rejected_servers(owner_id: int):
-    """Удаляет все отклонённые серверы пользователя (перед созданием нового)."""
+async def create_server(owner_id: int, name: str, description: str, ip: str, password: str):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute(
-            "DELETE FROM servers WHERE owner_id = ? AND status = 'rejected'",
-            (owner_id,),
-        )
-        await db.commit()
-
-
-async def create_server(
-    owner_id: int,
-    name: str,
-    description: str,
-    ip: str,
-    password: str,
-):
-    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute(
+        cursor = await db.execute(
             """INSERT INTO servers
                (owner_id, name, description, ip, password, status)
                VALUES (?, ?, ?, ?, ?, 'pending')""",
             (owner_id, name, description, ip, password),
         )
         await db.commit()
+        return cursor.lastrowid
 
 
 async def get_pending_servers():
@@ -205,9 +214,118 @@ async def delete_server(server_id: int, owner_id: int) -> bool:
     """Удаляет сервер. Возвращает True если строка была удалена."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
+        # Удаляем подписки на этот сервер
+        await db.execute("DELETE FROM subscriptions WHERE server_id = ?", (server_id,))
         cursor = await db.execute(
             "DELETE FROM servers WHERE id = ? AND owner_id = ?",
             (server_id, owner_id),
         )
         await db.commit()
         return cursor.rowcount > 0
+
+
+async def delete_rejected_servers(owner_id: int):
+    """Удаляет все отклонённые серверы пользователя (перед созданием нового)."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        # Получаем id отклонённых серверов для удаления подписок
+        async with db.execute(
+            "SELECT id FROM servers WHERE owner_id = ? AND status = 'rejected'",
+            (owner_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        for row in rows:
+            await db.execute("DELETE FROM subscriptions WHERE server_id = ?", (row[0],))
+        await db.execute(
+            "DELETE FROM servers WHERE owner_id = ? AND status = 'rejected'",
+            (owner_id,),
+        )
+        await db.commit()
+
+
+# ── Подписки ──────────────────────────────────────────────────────────────────
+
+async def subscribe(user_id: int, server_id: int) -> bool:
+    """Подписывает пользователя. Возвращает True если подписка добавлена (не дубль)."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        try:
+            await db.execute(
+                "INSERT INTO subscriptions (user_id, server_id) VALUES (?, ?)",
+                (user_id, server_id),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def unsubscribe(user_id: int, server_id: int) -> bool:
+    """Отписывает пользователя. Возвращает True если запись была удалена."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        cursor = await db.execute(
+            "DELETE FROM subscriptions WHERE user_id = ? AND server_id = ?",
+            (user_id, server_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def is_subscribed(user_id: int, server_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        async with db.execute(
+            "SELECT 1 FROM subscriptions WHERE user_id = ? AND server_id = ?",
+            (user_id, server_id),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def get_subscribers(server_id: int) -> list[int]:
+    """Возвращает список telegram_id подписчиков сервера."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        async with db.execute(
+            "SELECT user_id FROM subscriptions WHERE server_id = ?",
+            (server_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+
+# ── Логи ──────────────────────────────────────────────────────────────────────
+
+LOG_LABELS = {
+    "server_created":    "📝 Сервер создан",
+    "server_approved":   "✅ Сервер одобрен",
+    "server_rejected":   "❌ Сервер отклонён",
+    "server_deleted":    "🗑 Сервер удалён",
+    "server_online":     "🟢 Сервер включён",
+    "server_offline":    "⚫ Сервер выключен",
+    "password_changed":  "🔑 Пароль изменён",
+    "password_requested":"🔐 Пароль запрошен",
+    "subscribed":        "🔔 Подписка",
+    "unsubscribed":      "🔕 Отписка",
+}
+
+
+async def add_log(event: str, actor_id: int | None = None,
+                  server_id: int | None = None, details: str | None = None):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "INSERT INTO admin_logs (event, actor_id, server_id, details) VALUES (?, ?, ?, ?)",
+            (event, actor_id, server_id, details),
+        )
+        await db.commit()
+
+
+async def get_logs(limit: int = 40):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ) as cursor:
+            return await cursor.fetchall()
