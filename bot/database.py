@@ -56,7 +56,7 @@ async def get_user(telegram_id: int):
 
 
 async def get_any_server_by_owner(owner_id: int):
-    """Любой сервер пользователя (любой статус). Для проверки лимита 1 сервер на юзера."""
+    """Любой сервер пользователя (любой статус). Для /мой_сервер."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         db.row_factory = aiosqlite.Row
@@ -65,6 +65,29 @@ async def get_any_server_by_owner(owner_id: int):
             (owner_id,),
         ) as cursor:
             return await cursor.fetchone()
+
+
+async def get_active_server_by_owner(owner_id: int):
+    """Активный сервер (pending или approved). Для блокировки повторного создания."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM servers WHERE owner_id = ? AND status IN ('pending', 'approved') LIMIT 1",
+            (owner_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+
+async def delete_rejected_servers(owner_id: int):
+    """Удаляет все отклонённые серверы пользователя (перед созданием нового)."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "DELETE FROM servers WHERE owner_id = ? AND status = 'rejected'",
+            (owner_id,),
+        )
+        await db.commit()
 
 
 async def create_server(

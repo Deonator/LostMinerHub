@@ -182,13 +182,16 @@ async def cmd_servers(message: Message):
 async def cmd_create(message: Message, state: FSMContext):
     await db.register_user(message.from_user.id, message.from_user.username)
 
-    existing = await db.get_any_server_by_owner(message.from_user.id)
+    existing = await db.get_active_server_by_owner(message.from_user.id)
     if existing:
         await message.answer(
-            "❌ У тебя уже есть сервер. Создать можно только один.\n\n"
+            "❌ У тебя уже есть активный сервер. Создать можно только один.\n\n"
             "Управляй им через /мой_сервер"
         )
         return
+
+    # Удаляем старые отклонённые серверы перед созданием нового
+    await db.delete_rejected_servers(message.from_user.id)
 
     await state.set_state(CreateServer.name)
     await message.answer(
