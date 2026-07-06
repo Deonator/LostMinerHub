@@ -31,7 +31,6 @@ class CreateServer(StatesGroup):
     name = State()
     description = State()
     ip = State()
-    port = State()
     password = State()
 
 
@@ -87,7 +86,7 @@ async def cmd_servers(message: Message):
         text += (
             f"<b>{e(s['name'])}</b>\n"
             f"📝 {e(s['description'])}\n"
-            f"🌐 <code>{e(s['ip'])}:{e(str(s['port']))}</code>\n"
+            f"🌐 <code>{e(s['ip'])}</code>\n"
             f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
             f"📶 {status_badge(s['online'])}\n"
             f"{'─' * 24}\n"
@@ -104,7 +103,7 @@ async def cmd_create(message: Message, state: FSMContext):
     await state.set_state(CreateServer.name)
     await message.answer(
         "🛠 <b>Создание сервера</b>\n\n"
-        "Шаг 1/5 — Введи <b>название</b> сервера:\n"
+        "Шаг 1/4 — Введи <b>название</b> сервера:\n"
         "<i>Для отмены напиши /отмена</i>",
         parse_mode="HTML",
     )
@@ -120,7 +119,7 @@ async def create_name(message: Message, state: FSMContext):
         return
     await state.update_data(name=message.text)
     await state.set_state(CreateServer.description)
-    await message.answer("Шаг 2/5 — Введи <b>описание</b> сервера:", parse_mode="HTML")
+    await message.answer("Шаг 2/4 — Введи <b>описание</b> сервера:", parse_mode="HTML")
 
 
 @dp.message(CreateServer.description)
@@ -142,26 +141,9 @@ async def create_ip(message: Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, отправь текст.")
         return
     await state.update_data(ip=message.text.strip())
-    await state.set_state(CreateServer.port)
-    await message.answer("Шаг 4/5 — Введи <b>порт</b> сервера (число):", parse_mode="HTML")
-
-
-@dp.message(CreateServer.port)
-async def create_port(message: Message, state: FSMContext):
-    if not message.text:
-        await message.answer("❌ Пожалуйста, отправь текст.")
-        return
-    try:
-        port = int(message.text.strip())
-        if not (1 <= port <= 65535):
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Некорректный порт. Введи число от 1 до 65535:")
-        return
-    await state.update_data(port=port)
     await state.set_state(CreateServer.password)
     await message.answer(
-        "Шаг 5/5 — Введи <b>пароль</b> для входа на сервер\n"
+        "Шаг 4/4 — Введи <b>пароль</b> для входа на сервер\n"
         "(или напиши <code>нет</code>, если пароля нет):",
         parse_mode="HTML",
     )
@@ -183,7 +165,6 @@ async def create_password(message: Message, state: FSMContext):
         name=data["name"],
         description=data["description"],
         ip=data["ip"],
-        port=data["port"],
         password=password,
     )
     await state.clear()
@@ -191,7 +172,7 @@ async def create_password(message: Message, state: FSMContext):
     await message.answer(
         "✅ <b>Сервер отправлен на модерацию!</b>\n\n"
         f"📛 Название: {e(data['name'])}\n"
-        f"🌐 Адрес: {e(data['ip'])}:{e(str(data['port']))}\n\n"
+        f"🌐 Адрес: <code>{e(data['ip'])}</code>\n\n"
         "Ожидайте одобрения администратора.",
         parse_mode="HTML",
     )
@@ -201,7 +182,7 @@ async def create_password(message: Message, state: FSMContext):
         ADMIN_ID,
         f"🔔 <b>Новый сервер на модерации!</b>\n\n"
         f"📛 {e(data['name'])}\n"
-        f"🌐 {e(data['ip'])}:{e(str(data['port']))}\n\n"
+        f"🌐 <code>{e(data['ip'])}</code>\n\n"
         f"Используй /админ для проверки.",
     )
 
@@ -281,7 +262,7 @@ async def cmd_admin(message: Message):
         text = (
             f"📛 <b>{e(s['name'])}</b>\n"
             f"📝 {e(s['description'])}\n"
-            f"🌐 <code>{e(s['ip'])}:{e(str(s['port']))}</code>\n"
+            f"🌐 <code>{e(s['ip'])}</code>\n"
             f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
             f"👤 Владелец: <code>{s['owner_id']}</code>\n"
             f"🕐 Создан: {s['created_at']}"

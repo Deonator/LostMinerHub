@@ -32,7 +32,6 @@ async def init_db():
                 name TEXT NOT NULL,
                 description TEXT,
                 ip TEXT NOT NULL,
-                port INTEGER NOT NULL,
                 password TEXT,
                 status TEXT DEFAULT 'pending',
                 online INTEGER DEFAULT 0,
@@ -69,16 +68,15 @@ async def create_server(
     name: str,
     description: str,
     ip: str,
-    port: int,
     password: str,
 ):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute(
             """INSERT INTO servers
-               (owner_id, name, description, ip, port, password, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-            (owner_id, name, description, ip, port, password),
+               (owner_id, name, description, ip, password, status)
+               VALUES (?, ?, ?, ?, ?, 'pending')""",
+            (owner_id, name, description, ip, password),
         )
         await db.commit()
 
