@@ -1,6 +1,7 @@
 import asyncio
 import html
 import logging
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -60,15 +61,45 @@ async def notify_owner(owner_id: int, text: str):
         logger.warning("Не удалось уведомить %s: %s", owner_id, exc)
 
 
+def time_left(expires_at: str | None) -> str:
+    """Возвращает строку с оставшимся временем до выключения."""
+    if not expires_at:
+        return ""
+    try:
+        exp = datetime.fromisoformat(expires_at).replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = exp - now
+        total = int(delta.total_seconds())
+        if total <= 0:
+            return "менее минуты"
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        parts = []
+        if h:
+            parts.append(f"{h} ч")
+        if m:
+            parts.append(f"{m} мин")
+        if s and not h:
+            parts.append(f"{s} сек")
+        return " ".join(parts)
+    except Exception:
+        return ""
+
+
 def server_card(s) -> str:
     """Форматирует карточку сервера для показа владельцу."""
+    online_line = status_badge(s['online'])
+    if s['online'] and s['expires_at']:
+        left = time_left(s['expires_at'])
+        if left:
+            online_line += f"  ⏱ осталось: <b>{left}</b>"
     return (
         f"🖥 <b>{e(s['name'])}</b>\n"
         f"📝 {e(s['description'])}\n"
         f"🌐 <code>{e(s['ip'])}</code>\n"
         f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
         f"📋 Статус: {status_label(s['status'])}\n"
-        f"📶 {status_badge(s['online'])}"
+        f"📶 {online_line}"
     )
 
 
@@ -90,11 +121,15 @@ async def cmd_start(message: Message):
     await db.register_user(message.from_user.id, message.from_user.username)
     await message.answer(
         "👋 Добро пожаловать в <b>LostMiner</b> — каталог игровых серверов!\n\n"
-        "📋 <b>Команды:</b>\n"
-        "/серверы — список серверов\n"
+        "📋 <b>Команды:</b>\n\n"
+        "🗂 <b>Серверы</b>\n"
+        "/серверы — список всех одобренных серверов\n\n"
+        "🛠 <b>Мой сервер</b>\n"
         "/создать — добавить свой сервер\n"
-        "/мой_сервер — управление своим сервером\n\n"
-        "Используй команды в меню или пиши их вручную.",
+        "/мой_сервер — управление сервером (вкл/выкл, пароль)\n\n"
+        "🔧 <b>Прочее</b>\n"
+        "/отмена — отменить текущее действие\n\n"
+        "<i>Используй команды в меню или пиши их вручную.</i>",
         parse_mode="HTML",
     )
 
