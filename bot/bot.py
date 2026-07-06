@@ -54,9 +54,9 @@ def status_label(status: str) -> str:
     return {"pending": "⏳ На модерации", "approved": "✅ Одобрен", "rejected": "❌ Отклонён"}.get(status, status)
 
 
-async def notify_owner(owner_id: int, text: str):
+async def notify_owner(owner_id: int, text: str, reply_markup=None):
     try:
-        await bot.send_message(owner_id, text, parse_mode="HTML")
+        await bot.send_message(owner_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except Exception as exc:
         logger.warning("Не удалось уведомить %s: %s", owner_id, exc)
 
@@ -104,12 +104,30 @@ def server_card(s) -> str:
 
 
 def manage_keyboard(server_id: int, online: int) -> InlineKeyboardMarkup:
-    """Клавиатура управления сервером."""
+    """Клавиатура управления одобренным сервером."""
     toggle_text = "⚫ Выключить" if online else "🟢 Включить на 1 час"
     toggle_cb = f"srv:off:{server_id}" if online else f"srv:on:{server_id}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Изменить пароль", callback_data=f"srv:pwd:{server_id}")],
         [InlineKeyboardButton(text=toggle_text, callback_data=toggle_cb)],
+        [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
+    ])
+
+
+def delete_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения удаления."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"srv:delconfirm:{server_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"srv:delcancel:{server_id}"),
+        ],
+    ])
+
+
+def rejected_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для отклонённого сервера — только удаление."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
     ])
 
 
@@ -277,12 +295,14 @@ async def cmd_my_server(message: Message):
 
     text = server_card(server)
 
-    # Кнопки управления показываем только для одобренных серверов
     if server["status"] == "approved":
         kb = manage_keyboard(server["id"], server["online"])
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    elif server["status"] == "rejected":
+        kb = rejected_keyboard(server["id"])
     else:
-        await message.answer(text, parse_mode="HTML")
+        kb = None
+
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 # ──────────────────────────────────────────
@@ -336,6 +356,41 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
         )
         await callback.answer()
+
+    # ── Удалить: запрос подтверждения ──
+    elif action == "del":
+        await callback.message.edit_text(
+            f"🗑 <b>Удалить сервер «{e(server['name'])}»?</b>\n\n"
+            "Это действие необратимо. Сервер будет удалён полностью.",
+            parse_mode="HTML",
+            reply_markup=delete_keyboard(server_id),
+        )
+        await callback.answer()
+
+    # ── Удалить: подтверждение ──
+    elif action == "delconfirm":
+        name = server["name"]
+        deleted = await db.delete_server(server_id, callback.from_user.id)
+        if deleted:
+            await callback.message.edit_text(
+                f"🗑 Сервер <b>«{e(name)}»</b> удалён.\n\n"
+                "Ты можешь создать новый сервер командой /создать",
+                parse_mode="HTML",
+            )
+            await callback.answer("✅ Сервер удалён.")
+        else:
+            await callback.answer("❌ Не удалось удалить сервер.", show_alert=True)
+
+    # ── Удалить: отмена ──
+    elif action == "delcancel":
+        if server["status"] == "approved":
+            kb = manage_keyboard(server_id, server["online"])
+        elif server["status"] == "rejected":
+            kb = rejected_keyboard(server_id)
+        else:
+            kb = None
+        await callback.message.edit_text(server_card(server), parse_mode="HTML", reply_markup=kb)
+        await callback.answer("Удаление отменено.")
 
     else:
         await callback.answer("❌ Неизвестное действие.", show_alert=True)
@@ -438,13 +493,20 @@ async def cb_moderate(callback: CallbackQuery):
         await db.set_server_status(server_id, "rejected")
         result_text = f"❌ Сервер <b>«{e(server['name'])}»</b> отклонён."
         owner_text = (
-            f"❌ <b>Ваш сервер «{e(server['name'])}» отклонён.</b>\n"
-            f"Вы можете создать новый сервер командой /создать"
+            f"❌ <b>Ваш сервер «{e(server['name'])}» отклонён.</b>\n\n"
+            f"Удали его и создай новый командой /создать"
         )
+        owner_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
+        ])
 
     await callback.message.edit_text(result_text, parse_mode="HTML")
     await callback.answer()
-    await notify_owner(server["owner_id"], owner_text)
+
+    if action == "reject":
+        await notify_owner(server["owner_id"], owner_text, reply_markup=owner_kb)
+    else:
+        await notify_owner(server["owner_id"], owner_text)
 
 
 # ──────────────────────────────────────────

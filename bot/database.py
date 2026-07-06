@@ -176,3 +176,15 @@ async def get_server_by_id(server_id: int):
             "SELECT * FROM servers WHERE id = ?", (server_id,)
         ) as cursor:
             return await cursor.fetchone()
+
+
+async def delete_server(server_id: int, owner_id: int) -> bool:
+    """Удаляет сервер. Возвращает True если строка была удалена."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        cursor = await db.execute(
+            "DELETE FROM servers WHERE id = ? AND owner_id = ?",
+            (server_id, owner_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
