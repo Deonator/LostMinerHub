@@ -1,36 +1,47 @@
-# [Project name]
+# LostMiner Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Telegram-бот — каталог игровых серверов для LostMiner. Пользователи регистрируются, создают серверы, проходят модерацию и включают их онлайн на 1 час.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `python bot/bot.py` — запустить бота
+- Бот хранит данные в `bot/lostminer.db` (SQLite, создаётся автоматически)
+
+## Настройка перед запуском
+
+1. Открой `bot/config.py`
+2. Замени `BOT_TOKEN` на токен от @BotFather
+3. Замени `ADMIN_ID` на свой Telegram ID (узнать у @userinfobot)
+4. Запусти воркфлоу **LostMiner Bot**
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.13
+- aiogram 3.14 (Telegram Bot framework)
+- aiosqlite (асинхронный SQLite)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `bot/bot.py` — основной файл бота, все хендлеры
+- `bot/database.py` — все операции с БД
+- `bot/config.py` — токен бота и ID администратора
+- `bot/lostminer.db` — база данных SQLite (создаётся при первом запуске)
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- FSM (Finite State Machine) через aiogram для пошагового создания сервера
+- Inline-кнопки для модерации и выбора сервера
+- Онлайн-статус автоматически снимается при запросе списка (без фонового планировщика)
+- Один файл бота — чистый MVP без лишних слоёв абстракции
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- `/start` — регистрация
+- `/создать` — пошаговое создание сервера (5 шагов: название, описание, IP, порт, пароль)
+- `/серверы` — список одобренных серверов с онлайн-статусом
+- `/включить` — включить свой сервер на 1 час
+- `/админ` — панель модерации для ADMIN_ID (одобрить/отклонить)
+- `/отмена` — отменить текущее действие
 
 ## User preferences
 
@@ -38,8 +49,5 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Перед запуском обязательно заполнить `bot/config.py`
+- При добавлении новых пакетов — `pip install -r bot/requirements.txt`
