@@ -358,6 +358,8 @@ async def cmd_cancel(message: Message, state: FSMContext):
 # ──────────────────────────────────────────
 async def main():
     await db.init_db()
+    # Снимаем вебхук, если был установлен ранее
+    await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🤖 LostMiner бот запущен!")
     await dp.start_polling(bot)
 
