@@ -29,10 +29,10 @@ dp = Dispatcher(storage=MemoryStorage())
 # FSM
 # ──────────────────────────────────────────
 class CreateServer(StatesGroup):
-    name = State()
+    name        = State()
     description = State()
-    ip = State()
-    password = State()
+    ip          = State()
+    password    = State()
 
 
 class ChangePassword(StatesGroup):
@@ -51,7 +51,15 @@ def status_badge(online: int) -> str:
 
 
 def status_label(status: str) -> str:
-    return {"pending": "⏳ На модерации", "approved": "✅ Одобрен", "rejected": "❌ Отклонён"}.get(status, status)
+    return {
+        "pending":  "⏳ На модерации",
+        "approved": "✅ Одобрен",
+        "rejected": "❌ Отклонён",
+    }.get(status, status)
+
+
+def privacy_badge(is_private: int) -> str:
+    return "🔒 Закрытый" if is_private else "🔓 Открытый"
 
 
 async def notify_user(user_id: int, text: str, reply_markup=None):
@@ -65,20 +73,17 @@ def time_left(expires_at: str | None) -> str:
     if not expires_at:
         return ""
     try:
-        exp = datetime.fromisoformat(expires_at).replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
+        exp   = datetime.fromisoformat(expires_at).replace(tzinfo=timezone.utc)
+        now   = datetime.now(timezone.utc)
         total = int((exp - now).total_seconds())
         if total <= 0:
             return "менее минуты"
         h, rem = divmod(total, 3600)
-        m, s = divmod(rem, 60)
-        parts = []
-        if h:
-            parts.append(f"{h} ч")
-        if m:
-            parts.append(f"{m} мин")
-        if s and not h:
-            parts.append(f"{s} сек")
+        m, s   = divmod(rem, 60)
+        parts  = []
+        if h: parts.append(f"{h} ч")
+        if m: parts.append(f"{m} мин")
+        if s and not h: parts.append(f"{s} сек")
         return " ".join(parts)
     except Exception:
         return ""
@@ -86,46 +91,54 @@ def time_left(expires_at: str | None) -> str:
 
 def server_card(s) -> str:
     """Карточка сервера для владельца (пароль виден)."""
-    online_line = status_badge(s['online'])
-    if s['online'] and s['expires_at']:
-        left = time_left(s['expires_at'])
+    online_line = status_badge(s["online"])
+    if s["online"] and s["expires_at"]:
+        left = time_left(s["expires_at"])
         if left:
             online_line += f"  ⏱ осталось: <b>{left}</b>"
+    is_private = s["is_private"] if "is_private" in s.keys() else 0
     return (
         f"🖥 <b>{e(s['name'])}</b>\n"
         f"📝 {e(s['description'])}\n"
         f"🌐 <code>{e(s['ip'])}</code>\n"
         f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
         f"📋 Статус: {status_label(s['status'])}\n"
+        f"🔐 Тип: {privacy_badge(is_private)}\n"
         f"📶 {online_line}"
     )
 
 
 def public_server_card(s) -> str:
     """Публичная карточка сервера (пароль скрыт)."""
+    is_private = s["is_private"] if "is_private" in s.keys() else 0
+    pwd_line   = "🔒 скрыт (требуется одобрение)" if is_private else ("🔒 скрыт" if s["password"] else "нет")
     return (
-        f"🖥 <b>{e(s['name'])}</b>\n"
+        f"🖥 <b>{e(s['name'])}</b>  {privacy_badge(is_private)}\n"
         f"📝 {e(s['description'])}\n"
         f"🌐 <code>{e(s['ip'])}</code>\n"
-        f"🔑 Пароль: {'🔒 скрыт' if s['password'] else 'нет'}\n"
+        f"🔑 Пароль: {pwd_line}\n"
         f"📶 {status_badge(s['online'])}"
     )
 
 
-def manage_keyboard(server_id: int, online: int) -> InlineKeyboardMarkup:
-    toggle_text = "⚫ Выключить" if online else "🟢 Включить на 1 час"
-    toggle_cb = f"srv:off:{server_id}" if online else f"srv:on:{server_id}"
+# ── Клавиатуры ────────────────────────────────────────────────────────────────
+
+def manage_keyboard(server_id: int, online: int, is_private: int) -> InlineKeyboardMarkup:
+    toggle_text  = "⚫ Выключить"    if online     else "🟢 Включить на 1 час"
+    toggle_cb    = f"srv:off:{server_id}" if online else f"srv:on:{server_id}"
+    privacy_text = "🔓 Сделать открытым" if is_private else "🔒 Закрыть сервер"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Изменить пароль", callback_data=f"srv:pwd:{server_id}")],
-        [InlineKeyboardButton(text=toggle_text, callback_data=toggle_cb)],
-        [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
+        [InlineKeyboardButton(text="🔑 Изменить пароль",  callback_data=f"srv:pwd:{server_id}")],
+        [InlineKeyboardButton(text=toggle_text,            callback_data=toggle_cb)],
+        [InlineKeyboardButton(text=privacy_text,           callback_data=f"srv:toggleprivate:{server_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить сервер",    callback_data=f"srv:del:{server_id}")],
     ])
 
 
 def delete_keyboard(server_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"srv:delconfirm:{server_id}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data=f"srv:delcancel:{server_id}"),
+        InlineKeyboardButton(text="❌ Отмена",       callback_data=f"srv:delcancel:{server_id}"),
     ]])
 
 
@@ -135,15 +148,21 @@ def rejected_keyboard(server_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def public_server_keyboard(server_id: int, subscribed: bool, has_password: bool) -> InlineKeyboardMarkup:
-    """Кнопки под публичной карточкой сервера."""
+def public_server_keyboard(server_id: int, subscribed: bool,
+                            has_password: bool, is_private: int) -> InlineKeyboardMarkup:
     sub_text = "🔕 Отписаться" if subscribed else "🔔 Подписаться"
-    rows = [
-        [InlineKeyboardButton(text=sub_text, callback_data=f"sub:{server_id}")],
-    ]
+    rows = [[InlineKeyboardButton(text=sub_text, callback_data=f"sub:{server_id}")]]
     if has_password:
-        rows.append([InlineKeyboardButton(text="🔑 Узнать пароль", callback_data=f"getpwd:{server_id}")])
+        pwd_label = "🔑 Запросить пароль" if is_private else "🔑 Узнать пароль"
+        rows.append([InlineKeyboardButton(text=pwd_label, callback_data=f"getpwd:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def pwd_request_keyboard(request_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Выдать пароль", callback_data=f"pwdreq:approve:{request_id}"),
+        InlineKeyboardButton(text="❌ Отклонить",     callback_data=f"pwdreq:reject:{request_id}"),
+    ]])
 
 
 # ──────────────────────────────────────────
@@ -152,8 +171,12 @@ def public_server_keyboard(server_id: int, subscribed: bool, has_password: bool)
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await db.register_user(message.from_user.id, message.from_user.username)
-    is_admin = message.from_user.id == ADMIN_ID
-    admin_block = "\n🔐 <b>Администрирование</b>\n/админ — модерация серверов\n/логи — журнал событий\n" if is_admin else ""
+    is_admin    = message.from_user.id == ADMIN_ID
+    admin_block = (
+        "\n🔐 <b>Администрирование</b>\n"
+        "/админ — модерация серверов\n"
+        "/логи — журнал событий\n"
+    ) if is_admin else ""
     await message.answer(
         "👋 Добро пожаловать в <b>LostMiner</b> — каталог игровых серверов!\n\n"
         "📋 <b>Команды:</b>\n\n"
@@ -161,7 +184,7 @@ async def cmd_start(message: Message):
         "/серверы — список всех одобренных серверов\n\n"
         "🛠 <b>Мой сервер</b>\n"
         "/создать — добавить свой сервер\n"
-        "/мой_сервер — управление сервером (вкл/выкл, пароль)\n\n"
+        "/мой_сервер — управление сервером (вкл/выкл, тип, пароль)\n\n"
         "🔧 <b>Прочее</b>\n"
         "/отмена — отменить текущее действие\n"
         + admin_block +
@@ -180,23 +203,25 @@ async def cmd_servers(message: Message):
         await message.answer("📭 Пока нет ни одного одобренного сервера.")
         return
 
-    await message.answer(f"🗂 <b>Список серверов LostMiner ({len(servers)}):</b>", parse_mode="HTML")
+    await message.answer(
+        f"🗂 <b>Список серверов LostMiner ({len(servers)}):</b>",
+        parse_mode="HTML",
+    )
 
     uid = message.from_user.id
     for s in servers:
-        is_owner = s["owner_id"] == uid
+        is_owner   = s["owner_id"] == uid
+        is_private = s["is_private"] if "is_private" in s.keys() else 0
         subscribed = False if is_owner else await db.is_subscribed(uid, s["id"])
-        has_pwd = bool(s["password"])
-
-        text = public_server_card(s)
+        has_pwd    = bool(s["password"])
+        text       = public_server_card(s)
 
         if is_owner:
-            # Владелец видит только свою карточку без кнопок подписки
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⚙️ Управление", callback_data=f"myserver:{s['id']}")],
             ])
         else:
-            kb = public_server_keyboard(s["id"], subscribed, has_pwd)
+            kb = public_server_keyboard(s["id"], subscribed, has_pwd, is_private)
 
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
@@ -207,9 +232,7 @@ async def cmd_servers(message: Message):
 @dp.callback_query(F.data.startswith("myserver:"))
 async def cb_myserver_shortcut(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.answer(
-        "Управляй своим сервером через /мой_сервер",
-    )
+    await callback.message.answer("Управляй своим сервером через /мой_сервер")
 
 
 # ──────────────────────────────────────────
@@ -222,20 +245,18 @@ async def cb_subscribe(callback: CallbackQuery):
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
 
-    server_id = int(parts[1])
-    server = await db.get_server_by_id(server_id)
+    server_id  = int(parts[1])
+    server     = await db.get_server_by_id(server_id)
     if not server or server["status"] != "approved":
         await callback.answer("❌ Сервер не найден.", show_alert=True)
         return
 
     uid = callback.from_user.id
-
     if server["owner_id"] == uid:
         await callback.answer("❌ Нельзя подписаться на свой сервер.", show_alert=True)
         return
 
     currently = await db.is_subscribed(uid, server_id)
-
     if currently:
         await db.unsubscribe(uid, server_id)
         await db.add_log("unsubscribed", uid, server_id,
@@ -249,9 +270,8 @@ async def cb_subscribe(callback: CallbackQuery):
         await callback.answer("🔔 Вы подписались! Получите уведомление когда сервер включится.")
         subscribed = True
 
-    # Обновляем кнопки под сообщением
-    has_pwd = bool(server["password"])
-    new_kb = public_server_keyboard(server_id, subscribed, has_pwd)
+    is_private = server["is_private"] if "is_private" in server.keys() else 0
+    new_kb = public_server_keyboard(server_id, subscribed, bool(server["password"]), is_private)
     try:
         await callback.message.edit_reply_markup(reply_markup=new_kb)
     except Exception:
@@ -259,7 +279,7 @@ async def cb_subscribe(callback: CallbackQuery):
 
 
 # ──────────────────────────────────────────
-# Callback: получить пароль (getpwd:<server_id>)
+# Callback: получить / запросить пароль (getpwd:<server_id>)
 # ──────────────────────────────────────────
 @dp.callback_query(F.data.startswith("getpwd:"))
 async def cb_get_password(callback: CallbackQuery):
@@ -269,7 +289,7 @@ async def cb_get_password(callback: CallbackQuery):
         return
 
     server_id = int(parts[1])
-    server = await db.get_server_by_id(server_id)
+    server    = await db.get_server_by_id(server_id)
     if not server or server["status"] != "approved":
         await callback.answer("❌ Сервер не найден.", show_alert=True)
         return
@@ -278,40 +298,141 @@ async def cb_get_password(callback: CallbackQuery):
         await callback.answer("У этого сервера нет пароля.", show_alert=True)
         return
 
-    uid = callback.from_user.id
-    uname = f"@{callback.from_user.username}" if callback.from_user.username else f"id:{uid}"
+    uid        = callback.from_user.id
+    uname      = f"@{callback.from_user.username}" if callback.from_user.username else f"id:{uid}"
+    is_private = server["is_private"] if "is_private" in server.keys() else 0
 
-    # Отправляем пароль только в личку пользователю
-    try:
-        await bot.send_message(
-            uid,
-            f"🔑 Пароль сервера <b>«{e(server['name'])}»</b>:\n"
-            f"<code>{e(server['password'])}</code>\n\n"
-            "<i>Рекомендуем удалить это сообщение после прочтения.</i>",
-            parse_mode="HTML",
+    # ── Открытый сервер: сразу отправляем пароль ──
+    if not is_private:
+        try:
+            await bot.send_message(
+                uid,
+                f"🔑 Пароль сервера <b>«{e(server['name'])}»</b>:\n"
+                f"<code>{e(server['password'])}</code>\n\n"
+                "<i>Рекомендуем удалить это сообщение после прочтения.</i>",
+                parse_mode="HTML",
+            )
+            await callback.answer("✅ Пароль отправлен в личные сообщения.")
+        except Exception:
+            await callback.answer(
+                "❌ Не удалось отправить пароль. Напишите боту в личку и попробуйте снова.",
+                show_alert=True,
+            )
+            return
+
+        await notify_user(
+            server["owner_id"],
+            f"🔐 <b>Кто-то запросил пароль вашего сервера!</b>\n\n"
+            f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
+            f"👤 Пользователь: {e(uname)}\n"
+            f"🆔 ID: <code>{uid}</code>",
         )
-        await callback.answer("✅ Пароль отправлен в личные сообщения.")
-    except Exception:
+        await db.add_log("password_requested", uid, server_id,
+                         f"{uname} получил пароль сервера «{server['name']}»")
+        return
+
+    # ── Закрытый сервер: создаём запрос ──
+    existing = await db.get_pending_pwd_request(server_id, uid)
+    if existing:
         await callback.answer(
-            "❌ Не удалось отправить пароль. Напишите боту в личку и попробуйте снова.",
+            "⏳ Запрос уже отправлен. Ожидайте одобрения владельца.",
             show_alert=True,
         )
         return
 
-    # Уведомление владельцу
+    req_id = await db.create_pwd_request(server_id, uid)
+    await callback.answer("📨 Запрос отправлен. Ожидайте одобрения владельца.")
+
     await notify_user(
         server["owner_id"],
-        f"🔐 <b>Кто-то запросил пароль вашего сервера!</b>\n\n"
+        f"🔐 <b>Запрос пароля закрытого сервера!</b>\n\n"
         f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
         f"👤 Пользователь: {e(uname)}\n"
-        f"🆔 ID: <code>{uid}</code>",
+        f"🆔 ID: <code>{uid}</code>\n\n"
+        "Выдать пароль этому пользователю?",
+        reply_markup=pwd_request_keyboard(req_id),
     )
+    await db.add_log("pwd_request_sent", uid, server_id,
+                     f"{uname} запросил пароль закрытого сервера «{server['name']}»")
 
-    # Лог
-    await db.add_log(
-        "password_requested", uid, server_id,
-        f"{uname} запросил пароль сервера «{server['name']}»",
-    )
+
+# ──────────────────────────────────────────
+# Callback: владелец одобряет/отклоняет запрос пароля (pwdreq:approve/reject:<req_id>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("pwdreq:"))
+async def cb_pwd_request(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 3 or parts[1] not in ("approve", "reject") or not parts[2].isdigit():
+        await callback.answer("❌ Некорректные данные.", show_alert=True)
+        return
+
+    action     = parts[1]
+    request_id = int(parts[2])
+    req        = await db.get_pwd_request(request_id)
+
+    if not req:
+        await callback.answer("❌ Запрос не найден.", show_alert=True)
+        return
+
+    if req["status"] != "pending":
+        await callback.answer("Этот запрос уже обработан.", show_alert=True)
+        return
+
+    server = await db.get_server_by_id(req["server_id"])
+    if not server or server["owner_id"] != callback.from_user.id:
+        await callback.answer("❌ Нет доступа.", show_alert=True)
+        return
+
+    requester_id = req["requester_id"]
+
+    if action == "approve":
+        # Сначала доставляем пароль — только при успехе меняем статус
+        try:
+            await bot.send_message(
+                requester_id,
+                f"✅ <b>Владелец выдал вам пароль!</b>\n\n"
+                f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
+                f"🔑 Пароль: <code>{e(server['password'])}</code>\n\n"
+                "<i>Рекомендуем удалить это сообщение после прочтения.</i>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Доставка не удалась — запрос остаётся pending, владелец может повторить
+            await callback.message.edit_text(
+                f"⚠️ Не удалось доставить пароль пользователю <code>{requester_id}</code> — "
+                f"возможно он заблокировал бота.\n\n"
+                f"Запрос остаётся активным, попробуй выдать пароль снова.",
+                parse_mode="HTML",
+                reply_markup=pwd_request_keyboard(request_id),
+            )
+            await callback.answer("❌ Не удалось доставить пароль.", show_alert=True)
+            return
+
+        # Доставка успешна — закрываем запрос
+        await db.resolve_pwd_request(request_id, "approved")
+        await db.add_log("pwd_request_approved", callback.from_user.id, server["id"],
+                         f"Запрос пароля #{request_id} для сервера «{server['name']}» одобрен")
+        await callback.message.edit_text(
+            f"✅ Пароль выдан пользователю <code>{requester_id}</code>.",
+            parse_mode="HTML",
+        )
+        await callback.answer("✅ Пароль выдан.")
+
+    else:  # reject
+        await db.resolve_pwd_request(request_id, "rejected")
+        await db.add_log("pwd_request_rejected", callback.from_user.id, server["id"],
+                         f"Запрос пароля #{request_id} для сервера «{server['name']}» отклонён")
+
+        await notify_user(
+            requester_id,
+            f"❌ <b>Владелец отклонил ваш запрос пароля.</b>\n\n"
+            f"🖥 Сервер: <b>{e(server['name'])}</b>",
+        )
+        await callback.message.edit_text(
+            f"❌ Запрос пароля от <code>{requester_id}</code> отклонён.",
+            parse_mode="HTML",
+        )
+        await callback.answer("❌ Запрос отклонён.")
 
 
 # ──────────────────────────────────────────
@@ -330,7 +451,6 @@ async def cmd_create(message: Message, state: FSMContext):
         return
 
     await db.delete_rejected_servers(message.from_user.id)
-
     await state.set_state(CreateServer.name)
     await message.answer(
         "🛠 <b>Создание сервера</b>\n\n"
@@ -386,17 +506,17 @@ async def create_password_step(message: Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, отправь текст.")
         return
 
-    data = await state.get_data()
+    data     = await state.get_data()
     password = message.text.strip()
     if password.lower() == "нет":
         password = ""
 
     server_id = await db.create_server(
-        owner_id=message.from_user.id,
-        name=data["name"],
-        description=data["description"],
-        ip=data["ip"],
-        password=password,
+        owner_id    = message.from_user.id,
+        name        = data["name"],
+        description = data["description"],
+        ip          = data["ip"],
+        password    = password,
     )
     await state.clear()
 
@@ -412,7 +532,6 @@ async def create_password_step(message: Message, state: FSMContext):
         "Ожидайте одобрения администратора.",
         parse_mode="HTML",
     )
-
     await notify_user(
         ADMIN_ID,
         f"🔔 <b>Новый сервер на модерации!</b>\n\n"
@@ -429,19 +548,17 @@ async def create_password_step(message: Message, state: FSMContext):
 async def cmd_my_server(message: Message):
     server = await db.get_any_server_by_owner(message.from_user.id)
     if not server:
-        await message.answer(
-            "❌ У тебя нет сервера.\n"
-            "Создай его командой /создать"
-        )
+        await message.answer("❌ У тебя нет сервера.\nСоздай его командой /создать")
         return
 
     await db.get_approved_servers()
     server = await db.get_server_by_id(server["id"])
 
     text = server_card(server)
+    is_private = server["is_private"] if "is_private" in server.keys() else 0
 
     if server["status"] == "approved":
-        kb = manage_keyboard(server["id"], server["online"])
+        kb = manage_keyboard(server["id"], server["online"], is_private)
     elif server["status"] == "rejected":
         kb = rejected_keyboard(server["id"])
     else:
@@ -456,38 +573,42 @@ async def cmd_my_server(message: Message):
 @dp.callback_query(F.data.startswith("srv:"))
 async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
+    # Все команды: srv:<action>:<server_id>
     if len(parts) != 3 or not parts[2].isdigit():
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
 
-    action = parts[1]
+    action    = parts[1]
     server_id = int(parts[2])
-    server = await db.get_server_by_id(server_id)
+    server    = await db.get_server_by_id(server_id)
 
     if not server or server["owner_id"] != callback.from_user.id:
         await callback.answer("❌ Нет доступа.", show_alert=True)
         return
 
+    is_private = server["is_private"] if "is_private" in server.keys() else 0
+
     # ── Включить ──
     if action == "on":
         await db.set_server_online(server_id)
         server = await db.get_server_by_id(server_id)
+        is_private = server["is_private"] if "is_private" in server.keys() else 0
         await callback.message.edit_text(
             server_card(server), parse_mode="HTML",
-            reply_markup=manage_keyboard(server_id, 1),
+            reply_markup=manage_keyboard(server_id, 1, is_private),
         )
         await callback.answer("🟢 Сервер включён на 1 час!")
-
         await db.add_log("server_online", callback.from_user.id, server_id,
                          f"Сервер «{server['name']}» включён владельцем")
 
-        # Уведомление подписчикам
         subscribers = await db.get_subscribers(server_id)
         if subscribers:
+            pwd_hint = "🔑 Запросить пароль — кнопка в /серверы" if is_private \
+                       else ("🔒 скрыт — кнопка в /серверы" if server["password"] else "нет")
             notify_text = (
                 f"🟢 <b>Сервер «{e(server['name'])}» сейчас онлайн!</b>\n\n"
                 f"🌐 <code>{e(server['ip'])}</code>\n"
-                f"🔑 Пароль: {'🔒 скрыт (кнопка в /серверы)' if server['password'] else 'нет'}\n\n"
+                f"🔑 Пароль: {pwd_hint}\n\n"
                 f"⏱ Будет онлайн ещё 1 час."
             )
             for uid in subscribers:
@@ -497,9 +618,10 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     elif action == "off":
         await db.set_server_offline(server_id)
         server = await db.get_server_by_id(server_id)
+        is_private = server["is_private"] if "is_private" in server.keys() else 0
         await callback.message.edit_text(
             server_card(server), parse_mode="HTML",
-            reply_markup=manage_keyboard(server_id, 0),
+            reply_markup=manage_keyboard(server_id, 0, is_private),
         )
         await callback.answer("⚫ Сервер выключен.")
         await db.add_log("server_offline", callback.from_user.id, server_id,
@@ -517,11 +639,24 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer()
 
+    # ── Переключить тип (открытый/закрытый) ──
+    elif action == "toggleprivate":
+        new_private = await db.toggle_server_private(server_id)
+        server      = await db.get_server_by_id(server_id)
+        label       = "закрытым 🔒" if new_private else "открытым 🔓"
+        await callback.message.edit_text(
+            server_card(server), parse_mode="HTML",
+            reply_markup=manage_keyboard(server_id, server["online"], new_private),
+        )
+        await callback.answer(f"Сервер теперь {label}.")
+        await db.add_log("server_type_changed", callback.from_user.id, server_id,
+                         f"Сервер «{server['name']}» стал {'закрытым' if new_private else 'открытым'}")
+
     # ── Удалить: запрос подтверждения ──
     elif action == "del":
         await callback.message.edit_text(
             f"🗑 <b>Удалить сервер «{e(server['name'])}»?</b>\n\n"
-            "Это действие необратимо. Все подписчики будут отписаны.",
+            "Это действие необратимо. Все подписчики и запросы пароля будут удалены.",
             parse_mode="HTML",
             reply_markup=delete_keyboard(server_id),
         )
@@ -529,7 +664,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
 
     # ── Удалить: подтверждение ──
     elif action == "delconfirm":
-        name = server["name"]
+        name    = server["name"]
         deleted = await db.delete_server(server_id, callback.from_user.id)
         if deleted:
             await db.add_log("server_deleted", callback.from_user.id, server_id,
@@ -546,7 +681,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     # ── Удалить: отмена ──
     elif action == "delcancel":
         if server["status"] == "approved":
-            kb = manage_keyboard(server_id, server["online"])
+            kb = manage_keyboard(server_id, server["online"], is_private)
         elif server["status"] == "rejected":
             kb = rejected_keyboard(server_id)
         else:
@@ -564,7 +699,7 @@ async def change_password_step(message: Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, отправь текст.")
         return
 
-    data = await state.get_data()
+    data      = await state.get_data()
     server_id = data.get("manage_server_id")
     if not server_id:
         await state.clear()
@@ -620,7 +755,7 @@ async def cmd_admin(message: Message):
             f"🕐 Создан: {s['created_at']}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"mod:approve:{s['id']}"),
+            InlineKeyboardButton(text="✅ Одобрить",  callback_data=f"mod:approve:{s['id']}"),
             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod:reject:{s['id']}"),
         ]])
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
@@ -637,9 +772,9 @@ async def cb_moderate(callback: CallbackQuery):
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
 
-    action = parts[1]
+    action    = parts[1]
     server_id = int(parts[2])
-    server = await db.get_server_by_id(server_id)
+    server    = await db.get_server_by_id(server_id)
 
     if not server:
         await callback.answer("Сервер не найден.", show_alert=True)
@@ -649,30 +784,33 @@ async def cb_moderate(callback: CallbackQuery):
         await db.set_server_status(server_id, "approved")
         await db.add_log("server_approved", callback.from_user.id, server_id,
                          f"Сервер «{server['name']}» одобрен администратором")
-        result_text = f"✅ Сервер <b>«{e(server['name'])}»</b> одобрен."
-        owner_text = (
+        await callback.message.edit_text(
+            f"✅ Сервер <b>«{e(server['name'])}»</b> одобрен.", parse_mode="HTML"
+        )
+        await callback.answer()
+        await notify_user(
+            server["owner_id"],
             f"✅ <b>Ваш сервер «{e(server['name'])}» одобрен!</b>\n"
             f"Теперь он виден в списке /серверы\n"
-            f"Управляйте им через /мой_сервер"
+            f"Управляйте им через /мой_сервер",
         )
-        await callback.message.edit_text(result_text, parse_mode="HTML")
-        await callback.answer()
-        await notify_user(server["owner_id"], owner_text)
     else:
         await db.set_server_status(server_id, "rejected")
         await db.add_log("server_rejected", callback.from_user.id, server_id,
                          f"Сервер «{server['name']}» отклонён администратором")
-        result_text = f"❌ Сервер <b>«{e(server['name'])}»</b> отклонён."
-        owner_text = (
-            f"❌ <b>Ваш сервер «{e(server['name'])}» отклонён.</b>\n\n"
-            f"Удали его и создай новый командой /создать"
+        await callback.message.edit_text(
+            f"❌ Сервер <b>«{e(server['name'])}»</b> отклонён.", parse_mode="HTML"
         )
-        owner_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Удалить сервер", callback_data=f"srv:del:{server_id}")],
-        ])
-        await callback.message.edit_text(result_text, parse_mode="HTML")
         await callback.answer()
-        await notify_user(server["owner_id"], owner_text, reply_markup=owner_kb)
+        await notify_user(
+            server["owner_id"],
+            f"❌ <b>Ваш сервер «{e(server['name'])}» отклонён.</b>\n\n"
+            f"Удали его и создай новый командой /создать",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Удалить сервер",
+                                      callback_data=f"srv:del:{server_id}")],
+            ]),
+        )
 
 
 # ──────────────────────────────────────────
@@ -691,16 +829,14 @@ async def cmd_logs(message: Message):
 
     lines = ["📋 <b>Журнал событий (последние 40):</b>\n"]
     for log in logs:
-        label = db.LOG_LABELS.get(log["event"], log["event"])
-        dt = str(log["created_at"])[:16]
-        actor = f"id:{log['actor_id']}" if log["actor_id"] else "—"
-        srv = f" | сервер #{log['server_id']}" if log["server_id"] else ""
+        label  = db.LOG_LABELS.get(log["event"], log["event"])
+        dt     = str(log["created_at"])[:16]
+        actor  = f"id:{log['actor_id']}" if log["actor_id"] else "—"
+        srv    = f" | сервер #{log['server_id']}" if log["server_id"] else ""
         detail = f"\n   └ {e(log['details'])}" if log["details"] else ""
         lines.append(f"<code>{dt}</code> {label}\n   👤 {actor}{srv}{detail}")
 
     text = "\n\n".join(lines)
-
-    # Telegram лимит ~4096 символов — режем если нужно
     if len(text) > 4000:
         text = text[:3990] + "\n\n<i>...обрезано</i>"
 

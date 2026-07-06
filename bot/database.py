@@ -28,6 +28,7 @@ async def init_db():
                 status TEXT DEFAULT 'pending',
                 online INTEGER DEFAULT 0,
                 expires_at TIMESTAMP,
+                is_private INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (owner_id) REFERENCES users(telegram_id)
             )
@@ -53,7 +54,25 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS password_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id INTEGER NOT NULL,
+                requester_id INTEGER NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES servers(id),
+                FOREIGN KEY (requester_id) REFERENCES users(telegram_id)
+            )
+        """)
         await db.commit()
+
+        # Миграция: добавляем is_private если колонка ещё не существует
+        try:
+            await db.execute("ALTER TABLE servers ADD COLUMN is_private INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # Колонка уже есть
 
 
 # ── Пользователи ──────────────────────────────────────────────────────────────
@@ -109,8 +128,8 @@ async def create_server(owner_id: int, name: str, description: str, ip: str, pas
         await db.execute("PRAGMA journal_mode=WAL")
         cursor = await db.execute(
             """INSERT INTO servers
-               (owner_id, name, description, ip, password, status)
-               VALUES (?, ?, ?, ?, ?, 'pending')""",
+               (owner_id, name, description, ip, password, status, is_private)
+               VALUES (?, ?, ?, ?, ?, 'pending', 0)""",
             (owner_id, name, description, ip, password),
         )
         await db.commit()
@@ -142,18 +161,6 @@ async def get_approved_servers():
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM servers WHERE status = 'approved' ORDER BY online DESC, name ASC"
-        ) as cursor:
-            return await cursor.fetchall()
-
-
-async def get_owner_servers(owner_id: int):
-    """Одобренные серверы конкретного владельца."""
-    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM servers WHERE owner_id = ? AND status = 'approved'",
-            (owner_id,),
         ) as cursor:
             return await cursor.fetchall()
 
@@ -190,6 +197,23 @@ async def set_server_offline(server_id: int):
         await db.commit()
 
 
+async def toggle_server_private(server_id: int) -> int:
+    """Переключает тип сервера. Возвращает новое значение is_private."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE servers SET is_private = CASE WHEN is_private = 1 THEN 0 ELSE 1 END WHERE id = ?",
+            (server_id,),
+        )
+        await db.commit()
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT is_private FROM servers WHERE id = ?", (server_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row["is_private"] if row else 0
+
+
 async def update_server_password(server_id: int, password: str):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
@@ -214,8 +238,8 @@ async def delete_server(server_id: int, owner_id: int) -> bool:
     """Удаляет сервер. Возвращает True если строка была удалена."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
-        # Удаляем подписки на этот сервер
         await db.execute("DELETE FROM subscriptions WHERE server_id = ?", (server_id,))
+        await db.execute("DELETE FROM password_requests WHERE server_id = ?", (server_id,))
         cursor = await db.execute(
             "DELETE FROM servers WHERE id = ? AND owner_id = ?",
             (server_id, owner_id),
@@ -228,7 +252,6 @@ async def delete_rejected_servers(owner_id: int):
     """Удаляет все отклонённые серверы пользователя (перед созданием нового)."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
-        # Получаем id отклонённых серверов для удаления подписок
         async with db.execute(
             "SELECT id FROM servers WHERE owner_id = ? AND status = 'rejected'",
             (owner_id,),
@@ -236,6 +259,7 @@ async def delete_rejected_servers(owner_id: int):
             rows = await cur.fetchall()
         for row in rows:
             await db.execute("DELETE FROM subscriptions WHERE server_id = ?", (row[0],))
+            await db.execute("DELETE FROM password_requests WHERE server_id = ?", (row[0],))
         await db.execute(
             "DELETE FROM servers WHERE owner_id = ? AND status = 'rejected'",
             (owner_id,),
@@ -246,7 +270,6 @@ async def delete_rejected_servers(owner_id: int):
 # ── Подписки ──────────────────────────────────────────────────────────────────
 
 async def subscribe(user_id: int, server_id: int) -> bool:
-    """Подписывает пользователя. Возвращает True если подписка добавлена (не дубль)."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         try:
@@ -261,7 +284,6 @@ async def subscribe(user_id: int, server_id: int) -> bool:
 
 
 async def unsubscribe(user_id: int, server_id: int) -> bool:
-    """Отписывает пользователя. Возвращает True если запись была удалена."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         cursor = await db.execute(
@@ -283,7 +305,6 @@ async def is_subscribed(user_id: int, server_id: int) -> bool:
 
 
 async def get_subscribers(server_id: int) -> list[int]:
-    """Возвращает список telegram_id подписчиков сервера."""
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         async with db.execute(
@@ -294,19 +315,72 @@ async def get_subscribers(server_id: int) -> list[int]:
             return [row[0] for row in rows]
 
 
+# ── Запросы пароля ────────────────────────────────────────────────────────────
+
+async def create_pwd_request(server_id: int, requester_id: int) -> int:
+    """Создаёт запрос пароля. Возвращает id записи."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        cursor = await db.execute(
+            "INSERT INTO password_requests (server_id, requester_id, status) VALUES (?, ?, 'pending')",
+            (server_id, requester_id),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_pwd_request(request_id: int):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM password_requests WHERE id = ?", (request_id,)
+        ) as cursor:
+            return await cursor.fetchone()
+
+
+async def get_pending_pwd_request(server_id: int, requester_id: int):
+    """Ищет ожидающий запрос от этого пользователя на этот сервер."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM password_requests
+               WHERE server_id = ? AND requester_id = ? AND status = 'pending'
+               ORDER BY created_at DESC LIMIT 1""",
+            (server_id, requester_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+
+async def resolve_pwd_request(request_id: int, status: str):
+    """Меняет статус запроса на 'approved' или 'rejected'."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE password_requests SET status = ? WHERE id = ?",
+            (status, request_id),
+        )
+        await db.commit()
+
+
 # ── Логи ──────────────────────────────────────────────────────────────────────
 
 LOG_LABELS = {
-    "server_created":    "📝 Сервер создан",
-    "server_approved":   "✅ Сервер одобрен",
-    "server_rejected":   "❌ Сервер отклонён",
-    "server_deleted":    "🗑 Сервер удалён",
-    "server_online":     "🟢 Сервер включён",
-    "server_offline":    "⚫ Сервер выключен",
-    "password_changed":  "🔑 Пароль изменён",
-    "password_requested":"🔐 Пароль запрошен",
-    "subscribed":        "🔔 Подписка",
-    "unsubscribed":      "🔕 Отписка",
+    "server_created":           "📝 Сервер создан",
+    "server_approved":          "✅ Сервер одобрен",
+    "server_rejected":          "❌ Сервер отклонён",
+    "server_deleted":           "🗑 Сервер удалён",
+    "server_online":            "🟢 Сервер включён",
+    "server_offline":           "⚫ Сервер выключен",
+    "server_type_changed":      "🔒 Тип сервера изменён",
+    "password_changed":         "🔑 Пароль изменён",
+    "password_requested":       "🔐 Пароль запрошен (открытый)",
+    "pwd_request_sent":         "📨 Запрос пароля отправлен",
+    "pwd_request_approved":     "✅ Запрос пароля одобрен",
+    "pwd_request_rejected":     "❌ Запрос пароля отклонён",
+    "subscribed":               "🔔 Подписка",
+    "unsubscribed":             "🔕 Отписка",
 }
 
 
