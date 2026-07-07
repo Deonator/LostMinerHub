@@ -12,6 +12,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -128,13 +129,11 @@ def server_card(s) -> str:
 
 def public_server_card(s, page: int, total: int) -> str:
     """Публичная карточка сервера (пароль скрыт) + счётчик страниц."""
-    is_private   = s["is_private"] if "is_private" in s.keys() else 0
-    pwd_line     = "🔒 скрыт (требуется одобрение)" if is_private else ("🔒 скрыт" if s["password"] else "нет")
-    has_avatar   = bool(s["avatar_file_id"]) if "avatar_file_id" in s.keys() else False
-    avatar_badge = "  🖼" if has_avatar else ""
+    is_private = s["is_private"] if "is_private" in s.keys() else 0
+    pwd_line   = "🔒 скрыт (требуется одобрение)" if is_private else ("🔒 скрыт" if s["password"] else "нет")
     return (
         f"🗂 <b>Серверы LostMiner</b>  <code>{page + 1} / {total}</code>\n\n"
-        f"🖥 <b>{e(s['name'])}</b>  {privacy_badge(is_private)}{avatar_badge}\n"
+        f"🖥 <b>{e(s['name'])}</b>  {privacy_badge(is_private)}\n"
         f"📝 {e(s['description'])}\n"
         f"🌐 <code>{e(s['ip'])}</code>\n"
         f"🔑 Пароль: {pwd_line}\n"
@@ -251,24 +250,68 @@ async def _show_server_page(
     message  — для нового сообщения (send)
     callback — для редактирования существующего (edit)
     """
-    total    = len(servers)
-    page     = max(0, min(page, total - 1))
-    s        = servers[page]
-    is_owner = s["owner_id"] == uid
+    total      = len(servers)
+    page       = max(0, min(page, total - 1))
+    s          = servers[page]
+    is_owner   = s["owner_id"] == uid
     is_private = s["is_private"] if "is_private" in s.keys() else 0
     subscribed = False if is_owner else await db.is_subscribed(uid, s["id"])
     has_pwd    = bool(s["password"])
+    avatar_fid = s["avatar_file_id"] if "avatar_file_id" in s.keys() else None
 
     text = public_server_card(s, page, total)
     kb   = srvlist_keyboard(page, total, s["id"], subscribed, has_pwd, is_private, is_owner)
 
     if message:
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
-    elif callback:
-        try:
-            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            pass
+        # Новое сообщение
+        if avatar_fid:
+            await message.answer_photo(avatar_fid, caption=text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        return
+
+    if not callback:
+        return
+
+    # Редактирование существующего сообщения
+    cur_is_photo = bool(callback.message.photo)
+
+    if avatar_fid:
+        if cur_is_photo:
+            # Меняем фото и подпись прямо в сообщении
+            try:
+                await callback.message.edit_media(
+                    InputMediaPhoto(media=avatar_fid, caption=text, parse_mode="HTML"),
+                    reply_markup=kb,
+                )
+            except Exception:
+                pass
+        else:
+            # Было текстовое — удаляем и отправляем фото
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await bot.send_photo(
+                callback.message.chat.id, avatar_fid,
+                caption=text, parse_mode="HTML", reply_markup=kb,
+            )
+    else:
+        if cur_is_photo:
+            # Было фото — удаляем и отправляем текст
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await bot.send_message(
+                callback.message.chat.id, text, parse_mode="HTML", reply_markup=kb,
+            )
+        else:
+            # Оба текстовые — просто редактируем
+            try:
+                await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                pass
 
 
 # ──────────────────────────────────────────

@@ -165,7 +165,7 @@ async def get_approved_servers():
 
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM servers WHERE status = 'approved' ORDER BY online DESC, name ASC"
+            "SELECT * FROM servers WHERE status = 'approved' ORDER BY online DESC, created_at DESC"
         ) as cursor:
             return await cursor.fetchall()
 
