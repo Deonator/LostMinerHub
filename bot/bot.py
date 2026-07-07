@@ -1652,7 +1652,7 @@ async def main():
     asyncio.create_task(start_web())
 
     # Запускаем резервные копии
-    asyncio.create_task(backup_loop())
+
 
     # Middleware
     dp.message.outer_middleware(GlobalBanMiddleware())
