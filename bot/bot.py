@@ -3,7 +3,9 @@ import html
 import logging
 from datetime import datetime, timezone
 
-from aiogram import Bot, Dispatcher, F
+from typing import Any, Awaitable, Callable
+
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -16,6 +18,7 @@ from aiogram.types import (
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
+    TelegramObject,
 )
 
 from config import ADMIN_ID, BOT_TOKEN
@@ -44,6 +47,41 @@ class ChangePassword(StatesGroup):
 
 class ChangeAvatar(StatesGroup):
     waiting = State()
+
+
+class ServerBan(StatesGroup):
+    waiting = State()   # ввод user_id для бана на сервере
+
+
+class GlobalBan(StatesGroup):
+    ban_id   = State()  # ввод user_id для глобального бана
+    unban_id = State()  # ввод user_id для глобального разбана
+
+
+# ──────────────────────────────────────────
+# Middleware: глобальный бан
+# ──────────────────────────────────────────
+class GlobalBanMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = data.get("event_from_user")
+        if user and user.id != ADMIN_ID and await db.is_globally_banned(user.id):
+            if isinstance(event, CallbackQuery):
+                try:
+                    await event.answer("🚫 Вы заблокированы в боте.", show_alert=True)
+                except Exception:
+                    pass
+            elif isinstance(event, Message):
+                try:
+                    await event.answer("🚫 Вы заблокированы в боте администратором.")
+                except Exception:
+                    pass
+            return  # не передаём дальше
+        return await handler(event, data)
 
 
 # ──────────────────────────────────────────
@@ -146,11 +184,13 @@ def public_server_card(s, page: int, total: int) -> str:
 # ──────────────────────────────────────────
 def main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="🗂 Серверы"),     KeyboardButton(text="🛠 Мой сервер")],
+        [KeyboardButton(text="🗂 Серверы"),       KeyboardButton(text="🛠 Мой сервер")],
         [KeyboardButton(text="➕ Создать сервер"), KeyboardButton(text="❌ Отмена")],
     ]
     if is_admin:
-        rows.append([KeyboardButton(text="🔐 Админ"), KeyboardButton(text="📋 Логи")])
+        rows.append([KeyboardButton(text="🔐 Админ"),   KeyboardButton(text="📋 Логи")])
+        rows.append([KeyboardButton(text="🚫 Г-бан"),    KeyboardButton(text="✅ Г-разбан"),
+                     KeyboardButton(text="📋 Бан-лист")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -212,6 +252,7 @@ def manage_keyboard(
         [InlineKeyboardButton(text=toggle_text,            callback_data=toggle_cb)],
         [InlineKeyboardButton(text=privacy_text,           callback_data=f"srv:toggleprivate:{server_id}")],
         [InlineKeyboardButton(text=avatar_text,            callback_data=f"srv:avatar:{server_id}")],
+        [InlineKeyboardButton(text="🚫 Бан-лист сервера", callback_data=f"srv:banlist:{server_id}")],
         [InlineKeyboardButton(text="🗑 Удалить сервер",    callback_data=f"srv:del:{server_id}")],
     ])
 
@@ -461,6 +502,11 @@ async def cb_get_password(callback: CallbackQuery):
     uid        = callback.from_user.id
     uname      = f"@{callback.from_user.username}" if callback.from_user.username else f"id:{uid}"
     is_private = server["is_private"] if "is_private" in server.keys() else 0
+
+    # ── Проверка серверного бана ──
+    if await db.is_server_banned(server_id, uid):
+        await callback.answer("🚫 Вы заблокированы владельцем этого сервера.", show_alert=True)
+        return
 
     # ── Открытый сервер: сразу отправляем пароль ──
     if not is_private:
@@ -832,6 +878,56 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         await db.add_log("server_type_changed", callback.from_user.id, server_id,
                          f"Сервер «{server['name']}» стал {'закрытым' if new_private else 'открытым'}")
 
+    # ── Бан-лист сервера ──
+    elif action == "banlist":
+        bans = await db.get_server_bans(server_id)
+        rows = []
+        if bans:
+            for ban in bans:
+                dt = str(ban["created_at"])[:10]
+                rows.append([InlineKeyboardButton(
+                    text=f"🔓 Разбанить {ban['banned_user_id']}  ({dt})",
+                    callback_data=f"srvunban:{ban['id']}",
+                )])
+        rows.append([InlineKeyboardButton(
+            text="➕ Забанить по ID",
+            callback_data=f"srv:ban:{server_id}",
+        )])
+        rows.append([InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data=f"srv:back:{server_id}",
+        )])
+        header = f"🚫 <b>Бан-лист сервера «{e(server['name'])}»</b>\n\n"
+        if bans:
+            header += f"Забанено пользователей: <b>{len(bans)}</b>"
+        else:
+            header += "Забаненных нет."
+        await callback.message.edit_text(
+            header, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await callback.answer()
+
+    # ── Забанить по ID ──
+    elif action == "ban":
+        await state.update_data(manage_server_id=server_id)
+        await state.set_state(ServerBan.waiting)
+        await callback.message.answer(
+            f"🚫 <b>Бан пользователя на сервере «{e(server['name'])}»</b>\n\n"
+            "Отправь <b>Telegram ID</b> пользователя которого хочешь забанить:\n"
+            "<i>Для отмены нажми ❌ Отмена или /отмена</i>",
+            parse_mode="HTML",
+        )
+        await callback.answer()
+
+    # ── Назад в главное меню управления ──
+    elif action == "back":
+        server = await db.get_server_by_id(server_id)
+        await callback.message.edit_text(
+            server_card(server), parse_mode="HTML", reply_markup=_mkb(server),
+        )
+        await callback.answer()
+
     # ── Загрузить/изменить аватарку ──
     elif action == "avatar":
         # Блокируем повторную загрузку пока предыдущая на модерации
@@ -927,6 +1023,115 @@ async def change_password_step(message: Message, state: FSMContext):
         "Управление сервером: /мой_сервер",
         parse_mode="HTML",
     )
+
+
+# ──────────────────────────────────────────
+# FSM: бан пользователя на сервере (ServerBan.waiting)
+# ──────────────────────────────────────────
+@dp.message(ServerBan.waiting)
+async def server_ban_step(message: Message, state: FSMContext):
+    if not message.text or not message.text.strip().lstrip("-").isdigit():
+        await message.answer("❌ Введи числовой Telegram ID. Попробуй ещё раз:")
+        return
+
+    target_id = int(message.text.strip())
+    data      = await state.get_data()
+    server_id = data.get("manage_server_id")
+    if not server_id:
+        await state.clear()
+        await message.answer("❌ Что-то пошло не так. Попробуй снова через /мой_сервер")
+        return
+
+    server = await db.get_server_by_id(server_id)
+    if not server or server["owner_id"] != message.from_user.id:
+        await state.clear()
+        await message.answer("❌ Нет доступа.")
+        return
+
+    if target_id == message.from_user.id:
+        await message.answer("❌ Нельзя забанить самого себя.")
+        return
+    if target_id == ADMIN_ID:
+        await message.answer("❌ Нельзя забанить администратора.")
+        return
+
+    ok = await db.ban_server_user(server_id, target_id)
+    await state.clear()
+    if ok:
+        await db.add_log("server_ban", message.from_user.id, server_id,
+                         f"Пользователь {target_id} забанен на сервере «{server['name']}»")
+        await message.answer(
+            f"🚫 Пользователь <code>{target_id}</code> забанен на сервере <b>«{e(server['name'])}»</b>.\n"
+            "Он не сможет запрашивать пароль.\n\n"
+            "Бан-лист: /мой_сервер → 🚫 Бан-лист сервера",
+            parse_mode="HTML",
+        )
+        # Уведомляем забаненного
+        await notify_user(
+            target_id,
+            f"🚫 Вы были заблокированы на сервере <b>«{e(server['name'])}»</b>.\n"
+            "Вы больше не можете запрашивать пароль этого сервера.",
+        )
+    else:
+        await message.answer(f"⚠️ Пользователь <code>{target_id}</code> уже забанен на этом сервере.",
+                             parse_mode="HTML")
+
+
+# ──────────────────────────────────────────
+# Callback: разбан пользователя на сервере (srvunban:<ban_id>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("srvunban:"))
+async def cb_srv_unban(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 2 or not parts[1].isdigit():
+        await callback.answer("❌ Некорректные данные.", show_alert=True)
+        return
+
+    ban_id = int(parts[1])
+    ban    = await db.get_server_ban_by_id(ban_id)
+    if not ban:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+
+    server = await db.get_server_by_id(ban["server_id"])
+    if not server or server["owner_id"] != callback.from_user.id:
+        await callback.answer("❌ Нет доступа.", show_alert=True)
+        return
+
+    result = await db.unban_server_user_by_ban_id(ban_id)
+    if result:
+        server_id, user_id = result
+        await db.add_log("server_unban", callback.from_user.id, server_id,
+                         f"Пользователь {user_id} разбанен на сервере «{server['name']}»")
+        await notify_user(
+            user_id,
+            f"✅ Вы были разблокированы на сервере <b>«{e(server['name'])}»</b>.\n"
+            "Теперь вы снова можете запрашивать пароль.",
+        )
+
+    # Перерисовываем бан-лист
+    bans = await db.get_server_bans(server["id"])
+    rows = []
+    for b in bans:
+        dt = str(b["created_at"])[:10]
+        rows.append([InlineKeyboardButton(
+            text=f"🔓 Разбанить {b['banned_user_id']}  ({dt})",
+            callback_data=f"srvunban:{b['id']}",
+        )])
+    rows.append([InlineKeyboardButton(text="➕ Забанить по ID",
+                                      callback_data=f"srv:ban:{server['id']}")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                      callback_data=f"srv:back:{server['id']}")])
+    header = f"🚫 <b>Бан-лист сервера «{e(server['name'])}»</b>\n\n"
+    header += f"Забанено пользователей: <b>{len(bans)}</b>" if bans else "Забаненных нет."
+    try:
+        await callback.message.edit_text(
+            header, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    except Exception:
+        pass
+    await callback.answer("✅ Разбанен.")
 
 
 # ──────────────────────────────────────────
@@ -1176,6 +1381,118 @@ async def cb_avatar_moderate(callback: CallbackQuery):
 
 
 # ──────────────────────────────────────────
+# Команды глобального бана (только ADMIN_ID)
+# ──────────────────────────────────────────
+async def _do_global_ban(message: Message, state: FSMContext, target_id: int):
+    if target_id == ADMIN_ID:
+        await message.answer("❌ Нельзя забанить администратора.")
+        return
+    ok = await db.ban_user_globally(target_id)
+    await state.clear()
+    if ok:
+        await db.add_log("global_ban", message.from_user.id, None,
+                         f"Пользователь {target_id} глобально забанен")
+        await message.answer(f"🚫 Пользователь <code>{target_id}</code> глобально забанен.",
+                             parse_mode="HTML")
+        await notify_user(target_id, "🚫 <b>Вы заблокированы в боте администратором.</b>")
+    else:
+        await message.answer(f"⚠️ Пользователь <code>{target_id}</code> уже заблокирован.",
+                             parse_mode="HTML")
+
+
+async def _do_global_unban(message: Message, state: FSMContext, target_id: int):
+    ok = await db.unban_user_globally(target_id)
+    await state.clear()
+    if ok:
+        await db.add_log("global_unban", message.from_user.id, None,
+                         f"Пользователь {target_id} глобально разбанен")
+        await message.answer(f"✅ Пользователь <code>{target_id}</code> разбанен.",
+                             parse_mode="HTML")
+        await notify_user(target_id, "✅ <b>Ваш бан снят. Вы снова можете пользоваться ботом.</b>")
+    else:
+        await message.answer(f"⚠️ Пользователь <code>{target_id}</code> не был заблокирован.",
+                             parse_mode="HTML")
+
+
+@dp.message(Command("бан"))
+async def cmd_ban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+    # /бан 123456 — с аргументом
+    args = message.text.split(maxsplit=1)
+    if len(args) == 2 and args[1].lstrip("-").isdigit():
+        await _do_global_ban(message, state, int(args[1]))
+    else:
+        await state.set_state(GlobalBan.ban_id)
+        await message.answer(
+            "🚫 <b>Глобальный бан</b>\n\nВведи Telegram ID пользователя:\n"
+            "<i>Для отмены: /отмена</i>",
+            parse_mode="HTML",
+        )
+
+
+@dp.message(Command("разбан"))
+async def cmd_unban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) == 2 and args[1].lstrip("-").isdigit():
+        await _do_global_unban(message, state, int(args[1]))
+    else:
+        await state.set_state(GlobalBan.unban_id)
+        await message.answer(
+            "✅ <b>Глобальный разбан</b>\n\nВведи Telegram ID пользователя:\n"
+            "<i>Для отмены: /отмена</i>",
+            parse_mode="HTML",
+        )
+
+
+@dp.message(Command("банлист"))
+async def cmd_banlist(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+    await _show_global_banlist(message)
+
+
+async def _show_global_banlist(message: Message):
+    bans = await db.get_global_bans()
+    if not bans:
+        await message.answer("✅ Глобальный бан-лист пуст.")
+        return
+    lines = [f"🚫 <b>Глобальный бан-лист ({len(bans)}):</b>\n"]
+    for b in bans:
+        dt = str(b["created_at"])[:10]
+        lines.append(f"• <code>{b['user_id']}</code>  с {dt}")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+# ── FSM: ввод ID для глобального бана/разбана ──
+@dp.message(GlobalBan.ban_id)
+async def global_ban_id_step(message: Message, state: FSMContext):
+    if not message.text or not message.text.strip().lstrip("-").isdigit():
+        await message.answer("❌ Введи числовой Telegram ID:")
+        return
+    if message.from_user.id != ADMIN_ID:
+        await state.clear()
+        return
+    await _do_global_ban(message, state, int(message.text.strip()))
+
+
+@dp.message(GlobalBan.unban_id)
+async def global_unban_id_step(message: Message, state: FSMContext):
+    if not message.text or not message.text.strip().lstrip("-").isdigit():
+        await message.answer("❌ Введи числовой Telegram ID:")
+        return
+    if message.from_user.id != ADMIN_ID:
+        await state.clear()
+        return
+    await _do_global_unban(message, state, int(message.text.strip()))
+
+
+# ──────────────────────────────────────────
 # /логи — журнал событий
 # ──────────────────────────────────────────
 async def _cmd_logs_logic(message: Message):
@@ -1267,11 +1584,48 @@ async def btn_logs(message: Message, state: FSMContext):
     await _cmd_logs_logic(message)
 
 
+@dp.message(F.text == "🚫 Г-бан", StateFilter("*"))
+async def btn_global_ban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await state.set_state(GlobalBan.ban_id)
+    await message.answer(
+        "🚫 <b>Глобальный бан</b>\n\nВведи Telegram ID пользователя:\n"
+        "<i>Для отмены: /отмена или ❌ Отмена</i>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(F.text == "✅ Г-разбан", StateFilter("*"))
+async def btn_global_unban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await state.set_state(GlobalBan.unban_id)
+    await message.answer(
+        "✅ <b>Глобальный разбан</b>\n\nВведи Telegram ID пользователя:\n"
+        "<i>Для отмены: /отмена или ❌ Отмена</i>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(F.text == "📋 Бан-лист", StateFilter("*"))
+async def btn_banlist(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await _show_global_banlist(message)
+
+
 # ──────────────────────────────────────────
 # Запуск
 # ──────────────────────────────────────────
 async def main():
     await db.init_db()
+    # Middleware: блокировка глобально забаненных пользователей
+    dp.message.outer_middleware(GlobalBanMiddleware())
+    dp.callback_query.outer_middleware(GlobalBanMiddleware())
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🤖 LostMiner бот запущен!")
     await dp.start_polling(bot)

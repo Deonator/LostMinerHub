@@ -65,6 +65,23 @@ async def init_db():
                 FOREIGN KEY (requester_id) REFERENCES users(telegram_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS server_bans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id INTEGER NOT NULL,
+                banned_user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(server_id, banned_user_id),
+                FOREIGN KEY (server_id) REFERENCES servers(id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bot_bans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
         # Миграции: добавляем колонки если их ещё нет
@@ -245,6 +262,7 @@ async def delete_server(server_id: int, owner_id: int) -> bool:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("DELETE FROM subscriptions WHERE server_id = ?", (server_id,))
         await db.execute("DELETE FROM password_requests WHERE server_id = ?", (server_id,))
+        await db.execute("DELETE FROM server_bans WHERE server_id = ?", (server_id,))
         cursor = await db.execute(
             "DELETE FROM servers WHERE id = ? AND owner_id = ?",
             (server_id, owner_id),
@@ -265,6 +283,7 @@ async def delete_rejected_servers(owner_id: int):
         for row in rows:
             await db.execute("DELETE FROM subscriptions WHERE server_id = ?", (row[0],))
             await db.execute("DELETE FROM password_requests WHERE server_id = ?", (row[0],))
+            await db.execute("DELETE FROM server_bans WHERE server_id = ?", (row[0],))
         await db.execute(
             "DELETE FROM servers WHERE owner_id = ? AND status = 'rejected'",
             (owner_id,),
@@ -429,6 +448,128 @@ async def resolve_pwd_request(request_id: int, status: str):
         await db.commit()
 
 
+# ── Серверные баны ────────────────────────────────────────────────────────────
+
+async def ban_server_user(server_id: int, user_id: int) -> bool:
+    """Банит пользователя на сервере. False если уже забанен."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        try:
+            await db.execute(
+                "INSERT INTO server_bans (server_id, banned_user_id) VALUES (?, ?)",
+                (server_id, user_id),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def unban_server_user(server_id: int, user_id: int) -> bool:
+    """Разбанивает пользователя на сервере. False если не был забанен."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        cursor = await db.execute(
+            "DELETE FROM server_bans WHERE server_id = ? AND banned_user_id = ?",
+            (server_id, user_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def unban_server_user_by_ban_id(ban_id: int) -> tuple[int, int] | None:
+    """Разбанивает по ID записи. Возвращает (server_id, user_id) или None."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT server_id, banned_user_id FROM server_bans WHERE id = ?", (ban_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        await db.execute("DELETE FROM server_bans WHERE id = ?", (ban_id,))
+        await db.commit()
+        return row["server_id"], row["banned_user_id"]
+
+
+async def is_server_banned(server_id: int, user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        async with db.execute(
+            "SELECT 1 FROM server_bans WHERE server_id = ? AND banned_user_id = ?",
+            (server_id, user_id),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def get_server_bans(server_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM server_bans WHERE server_id = ? ORDER BY created_at DESC",
+            (server_id,),
+        ) as cur:
+            return await cur.fetchall()
+
+
+async def get_server_ban_by_id(ban_id: int):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM server_bans WHERE id = ?", (ban_id,)
+        ) as cur:
+            return await cur.fetchone()
+
+
+# ── Глобальные баны (бот) ──────────────────────────────────────────────────────
+
+async def ban_user_globally(user_id: int) -> bool:
+    """Глобально банит пользователя. False если уже забанен."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        try:
+            await db.execute(
+                "INSERT INTO bot_bans (user_id) VALUES (?)", (user_id,)
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def unban_user_globally(user_id: int) -> bool:
+    """Снимает глобальный бан. False если не был забанен."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        cursor = await db.execute(
+            "DELETE FROM bot_bans WHERE user_id = ?", (user_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def is_globally_banned(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        async with db.execute(
+            "SELECT 1 FROM bot_bans WHERE user_id = ?", (user_id,)
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def get_global_bans() -> list:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM bot_bans ORDER BY created_at DESC"
+        ) as cur:
+            return await cur.fetchall()
+
+
 # ── Логи ──────────────────────────────────────────────────────────────────────
 
 LOG_LABELS = {
@@ -449,6 +590,10 @@ LOG_LABELS = {
     "avatar_uploaded":          "🖼 Аватарка загружена",
     "avatar_approved":          "✅ Аватарка одобрена",
     "avatar_rejected":          "❌ Аватарка отклонена",
+    "server_ban":               "🚫 Серверный бан",
+    "server_unban":             "✅ Серверный разбан",
+    "global_ban":               "🚫 Глобальный бан",
+    "global_unban":             "✅ Глобальный разбан",
 }
 
 
