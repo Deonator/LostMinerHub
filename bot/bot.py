@@ -41,6 +41,10 @@ class ChangePassword(StatesGroup):
     waiting = State()
 
 
+class ChangeAvatar(StatesGroup):
+    waiting = State()
+
+
 # ──────────────────────────────────────────
 # Утилиты
 # ──────────────────────────────────────────
@@ -91,6 +95,17 @@ def time_left(expires_at: str | None) -> str:
         return ""
 
 
+def _avatar_status_line(s) -> str:
+    keys = s.keys()
+    pending = s["avatar_pending_file_id"] if "avatar_pending_file_id" in keys else None
+    approved = s["avatar_file_id"] if "avatar_file_id" in keys else None
+    if pending:
+        return "🖼 Аватарка: ⏳ на модерации"
+    if approved:
+        return "🖼 Аватарка: ✅ есть"
+    return "🖼 Аватарка: нет"
+
+
 def server_card(s) -> str:
     """Карточка сервера для владельца (пароль виден)."""
     online_line = status_badge(s["online"])
@@ -106,17 +121,20 @@ def server_card(s) -> str:
         f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
         f"📋 Статус: {status_label(s['status'])}\n"
         f"🔐 Тип: {privacy_badge(is_private)}\n"
+        f"{_avatar_status_line(s)}\n"
         f"📶 {online_line}"
     )
 
 
 def public_server_card(s, page: int, total: int) -> str:
     """Публичная карточка сервера (пароль скрыт) + счётчик страниц."""
-    is_private = s["is_private"] if "is_private" in s.keys() else 0
-    pwd_line   = "🔒 скрыт (требуется одобрение)" if is_private else ("🔒 скрыт" if s["password"] else "нет")
+    is_private   = s["is_private"] if "is_private" in s.keys() else 0
+    pwd_line     = "🔒 скрыт (требуется одобрение)" if is_private else ("🔒 скрыт" if s["password"] else "нет")
+    has_avatar   = bool(s["avatar_file_id"]) if "avatar_file_id" in s.keys() else False
+    avatar_badge = "  🖼" if has_avatar else ""
     return (
         f"🗂 <b>Серверы LostMiner</b>  <code>{page + 1} / {total}</code>\n\n"
-        f"🖥 <b>{e(s['name'])}</b>  {privacy_badge(is_private)}\n"
+        f"🖥 <b>{e(s['name'])}</b>  {privacy_badge(is_private)}{avatar_badge}\n"
         f"📝 {e(s['description'])}\n"
         f"🌐 <code>{e(s['ip'])}</code>\n"
         f"🔑 Пароль: {pwd_line}\n"
@@ -174,14 +192,27 @@ def srvlist_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def manage_keyboard(server_id: int, online: int, is_private: int) -> InlineKeyboardMarkup:
+def manage_keyboard(
+    server_id: int,
+    online: int,
+    is_private: int,
+    avatar_file_id: str | None = None,
+    avatar_pending_file_id: str | None = None,
+) -> InlineKeyboardMarkup:
     toggle_text  = "⚫ Выключить"    if online     else "🟢 Включить на 1 час"
     toggle_cb    = f"srv:off:{server_id}" if online else f"srv:on:{server_id}"
     privacy_text = "🔓 Сделать открытым" if is_private else "🔒 Закрыть сервер"
+    if avatar_pending_file_id:
+        avatar_text = "🖼 Аватарка (⏳ на модерации)"
+    elif avatar_file_id:
+        avatar_text = "🖼 Изменить аватарку"
+    else:
+        avatar_text = "🖼 Загрузить аватарку"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Изменить пароль",  callback_data=f"srv:pwd:{server_id}")],
         [InlineKeyboardButton(text=toggle_text,            callback_data=toggle_cb)],
         [InlineKeyboardButton(text=privacy_text,           callback_data=f"srv:toggleprivate:{server_id}")],
+        [InlineKeyboardButton(text=avatar_text,            callback_data=f"srv:avatar:{server_id}")],
         [InlineKeyboardButton(text="🗑 Удалить сервер",    callback_data=f"srv:del:{server_id}")],
     ])
 
@@ -636,12 +667,23 @@ async def _cmd_my_server_logic(message: Message):
         await message.answer("❌ У тебя нет сервера.\nСоздай его командой /создать")
         return
 
-    server = await db.get_server_by_id(server["id"])
-    text   = server_card(server)
-    is_private = server["is_private"] if "is_private" in server.keys() else 0
+    server     = await db.get_server_by_id(server["id"])
+    keys       = server.keys()
+    is_private = server["is_private"] if "is_private" in keys else 0
+    avatar_fid = server["avatar_file_id"] if "avatar_file_id" in keys else None
+    avatar_pid = server["avatar_pending_file_id"] if "avatar_pending_file_id" in keys else None
 
+    # Показываем одобренную аватарку отдельным фото выше карточки
+    if avatar_fid:
+        try:
+            await bot.send_photo(message.chat.id, avatar_fid,
+                                 caption="🖼 <b>Аватарка сервера</b>", parse_mode="HTML")
+        except Exception:
+            pass
+
+    text = server_card(server)
     if server["status"] == "approved":
-        kb = manage_keyboard(server["id"], server["online"], is_private)
+        kb = manage_keyboard(server["id"], server["online"], is_private, avatar_fid, avatar_pid)
     elif server["status"] == "rejected":
         kb = rejected_keyboard(server["id"])
     else:
@@ -673,21 +715,32 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нет доступа.", show_alert=True)
         return
 
-    is_private = server["is_private"] if "is_private" in server.keys() else 0
+    keys       = server.keys()
+    is_private = server["is_private"] if "is_private" in keys else 0
+    avatar_fid = server["avatar_file_id"] if "avatar_file_id" in keys else None
+    avatar_pid = server["avatar_pending_file_id"] if "avatar_pending_file_id" in keys else None
+
+    def _mkb(srv):
+        k = srv.keys()
+        return manage_keyboard(
+            srv["id"], srv["online"],
+            srv["is_private"] if "is_private" in k else 0,
+            srv["avatar_file_id"] if "avatar_file_id" in k else None,
+            srv["avatar_pending_file_id"] if "avatar_pending_file_id" in k else None,
+        )
 
     # ── Включить ──
     if action == "on":
         await db.set_server_online(server_id)
-        server     = await db.get_server_by_id(server_id)
-        is_private = server["is_private"] if "is_private" in server.keys() else 0
+        server = await db.get_server_by_id(server_id)
         await callback.message.edit_text(
-            server_card(server), parse_mode="HTML",
-            reply_markup=manage_keyboard(server_id, 1, is_private),
+            server_card(server), parse_mode="HTML", reply_markup=_mkb(server),
         )
         await callback.answer("🟢 Сервер включён на 1 час!")
         await db.add_log("server_online", callback.from_user.id, server_id,
                          f"Сервер «{server['name']}» включён владельцем")
 
+        is_private = server["is_private"] if "is_private" in server.keys() else 0
         subscribers = await db.get_subscribers(server_id)
         if subscribers:
             pwd_hint = "🔑 Запросить пароль — кнопка в /серверы" if is_private \
@@ -704,11 +757,9 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     # ── Выключить ──
     elif action == "off":
         await db.set_server_offline(server_id)
-        server     = await db.get_server_by_id(server_id)
-        is_private = server["is_private"] if "is_private" in server.keys() else 0
+        server = await db.get_server_by_id(server_id)
         await callback.message.edit_text(
-            server_card(server), parse_mode="HTML",
-            reply_markup=manage_keyboard(server_id, 0, is_private),
+            server_card(server), parse_mode="HTML", reply_markup=_mkb(server),
         )
         await callback.answer("⚫ Сервер выключен.")
         await db.add_log("server_offline", callback.from_user.id, server_id,
@@ -732,12 +783,31 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         server      = await db.get_server_by_id(server_id)
         label       = "закрытым 🔒" if new_private else "открытым 🔓"
         await callback.message.edit_text(
-            server_card(server), parse_mode="HTML",
-            reply_markup=manage_keyboard(server_id, server["online"], new_private),
+            server_card(server), parse_mode="HTML", reply_markup=_mkb(server),
         )
         await callback.answer(f"Сервер теперь {label}.")
         await db.add_log("server_type_changed", callback.from_user.id, server_id,
                          f"Сервер «{server['name']}» стал {'закрытым' if new_private else 'открытым'}")
+
+    # ── Загрузить/изменить аватарку ──
+    elif action == "avatar":
+        # Блокируем повторную загрузку пока предыдущая на модерации
+        if avatar_pid:
+            await callback.answer(
+                "⏳ Аватарка уже на модерации. Дождись решения администратора.",
+                show_alert=True,
+            )
+            return
+        await state.update_data(manage_server_id=server_id)
+        await state.set_state(ChangeAvatar.waiting)
+        await callback.message.answer(
+            "🖼 <b>Загрузка аватарки</b>\n\n"
+            "Отправь фотографию — она будет отправлена на модерацию.\n"
+            "После одобрения аватарка появится на карточке сервера.\n\n"
+            "<i>Для отмены нажми кнопку ❌ Отмена или напиши /отмена</i>",
+            parse_mode="HTML",
+        )
+        await callback.answer()
 
     # ── Удалить: запрос подтверждения ──
     elif action == "del":
@@ -768,7 +838,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     # ── Удалить: отмена ──
     elif action == "delcancel":
         if server["status"] == "approved":
-            kb = manage_keyboard(server_id, server["online"], is_private)
+            kb = _mkb(server)
         elif server["status"] == "rejected":
             kb = rejected_keyboard(server_id)
         else:
@@ -817,6 +887,63 @@ async def change_password_step(message: Message, state: FSMContext):
 
 
 # ──────────────────────────────────────────
+# FSM: загрузка аватарки (ChangeAvatar.waiting)
+# ──────────────────────────────────────────
+@dp.message(ChangeAvatar.waiting)
+async def change_avatar_step(message: Message, state: FSMContext):
+    # Принимаем только фото
+    if not message.photo:
+        await message.answer(
+            "❌ Пожалуйста, отправь именно <b>фотографию</b> (не файл).\n"
+            "Для отмены нажми ❌ Отмена.",
+            parse_mode="HTML",
+        )
+        return
+
+    data      = await state.get_data()
+    server_id = data.get("manage_server_id")
+    if not server_id:
+        await state.clear()
+        await message.answer("❌ Что-то пошло не так. Попробуй снова через /мой_сервер")
+        return
+
+    server = await db.get_server_by_id(server_id)
+    if not server or server["owner_id"] != message.from_user.id:
+        await state.clear()
+        await message.answer("❌ Нет доступа.")
+        return
+
+    # Берём наибольшее разрешение
+    file_id = message.photo[-1].file_id
+    await db.set_avatar_pending(server_id, file_id)
+    await db.add_log("avatar_uploaded", message.from_user.id, server_id,
+                     f"Аватарка сервера «{server['name']}» отправлена на модерацию")
+    await state.clear()
+
+    await message.answer(
+        "📨 <b>Аватарка отправлена на модерацию!</b>\n\n"
+        "После одобрения администратором она появится на карточке сервера.",
+        parse_mode="HTML",
+    )
+
+    # Уведомляем админа с предпросмотром
+    try:
+        await bot.send_photo(
+            ADMIN_ID,
+            file_id,
+            caption=(
+                f"🖼 <b>Новая аватарка на модерации!</b>\n\n"
+                f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
+                f"👤 Владелец: <code>{server['owner_id']}</code>\n\n"
+                "Используй /админ для проверки."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("Не удалось уведомить админа об аватарке: %s", exc)
+
+
+# ──────────────────────────────────────────
 # /админ — панель модерации
 # ──────────────────────────────────────────
 async def _cmd_admin_logic(message: Message):
@@ -824,27 +951,61 @@ async def _cmd_admin_logic(message: Message):
         await message.answer("❌ У тебя нет прав для этой команды.")
         return
 
-    servers = await db.get_pending_servers()
-    if not servers:
-        await message.answer("✅ Нет серверов на модерации.")
+    pending_servers  = await db.get_pending_servers()
+    pending_avatars  = await db.get_servers_with_pending_avatars()
+    has_anything     = bool(pending_servers or pending_avatars)
+
+    if not has_anything:
+        await message.answer("✅ Нет заявок на модерации.")
         return
 
-    await message.answer(f"🔍 <b>Серверы на модерации: {len(servers)}</b>", parse_mode="HTML")
-
-    for s in servers:
-        text = (
-            f"📛 <b>{e(s['name'])}</b>\n"
-            f"📝 {e(s['description'])}\n"
-            f"🌐 <code>{e(s['ip'])}</code>\n"
-            f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
-            f"👤 Владелец: <code>{s['owner_id']}</code>\n"
-            f"🕐 Создан: {s['created_at']}"
+    # ── Серверы ──
+    if pending_servers:
+        await message.answer(
+            f"🔍 <b>Серверы на модерации: {len(pending_servers)}</b>", parse_mode="HTML"
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Одобрить",  callback_data=f"mod:approve:{s['id']}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod:reject:{s['id']}"),
-        ]])
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        for s in pending_servers:
+            text = (
+                f"📛 <b>{e(s['name'])}</b>\n"
+                f"📝 {e(s['description'])}\n"
+                f"🌐 <code>{e(s['ip'])}</code>\n"
+                f"🔑 Пароль: <code>{e(s['password']) if s['password'] else 'нет'}</code>\n"
+                f"👤 Владелец: <code>{s['owner_id']}</code>\n"
+                f"🕐 Создан: {s['created_at']}"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Одобрить",  callback_data=f"mod:approve:{s['id']}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod:reject:{s['id']}"),
+            ]])
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    # ── Аватарки ──
+    if pending_avatars:
+        await message.answer(
+            f"🖼 <b>Аватарки на модерации: {len(pending_avatars)}</b>", parse_mode="HTML"
+        )
+        for s in pending_avatars:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Одобрить",  callback_data=f"avatarmod:approve:{s['id']}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"avatarmod:reject:{s['id']}"),
+            ]])
+            try:
+                await bot.send_photo(
+                    message.chat.id,
+                    s["avatar_pending_file_id"],
+                    caption=(
+                        f"🖼 Аватарка сервера <b>«{e(s['name'])}»</b>\n"
+                        f"👤 Владелец: <code>{s['owner_id']}</code>"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
+            except Exception:
+                await message.answer(
+                    f"⚠️ Не удалось загрузить аватарку сервера «{e(s['name'])}».",
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
 
 
 @dp.message(Command("админ"))
@@ -901,6 +1062,73 @@ async def cb_moderate(callback: CallbackQuery):
                 [InlineKeyboardButton(text="🗑 Удалить сервер",
                                       callback_data=f"srv:del:{server_id}")],
             ]),
+        )
+
+
+# ──────────────────────────────────────────
+# Callback: модерация аватарок (avatarmod:approve/reject:<server_id>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("avatarmod:"))
+async def cb_avatar_moderate(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 3 or parts[1] not in ("approve", "reject") or not parts[2].isdigit():
+        await callback.answer("❌ Некорректные данные.", show_alert=True)
+        return
+
+    action    = parts[1]
+    server_id = int(parts[2])
+    server    = await db.get_server_by_id(server_id)
+
+    if not server:
+        await callback.answer("Сервер не найден.", show_alert=True)
+        return
+
+    keys       = server.keys()
+    avatar_pid = server["avatar_pending_file_id"] if "avatar_pending_file_id" in keys else None
+    if not avatar_pid:
+        await callback.answer("Аватарка уже обработана.", show_alert=True)
+        return
+
+    if action == "approve":
+        await db.approve_avatar(server_id)
+        await db.add_log("avatar_approved", callback.from_user.id, server_id,
+                         f"Аватарка сервера «{server['name']}» одобрена")
+        try:
+            await callback.message.edit_caption(
+                caption=f"✅ Аватарка сервера <b>«{e(server['name'])}»</b> одобрена.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await callback.answer("✅ Аватарка одобрена.")
+        await notify_user(
+            server["owner_id"],
+            f"✅ <b>Аватарка вашего сервера одобрена!</b>\n\n"
+            f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
+            "Она теперь отображается в /мой_сервер.",
+        )
+
+    else:  # reject
+        await db.reject_avatar(server_id)
+        await db.add_log("avatar_rejected", callback.from_user.id, server_id,
+                         f"Аватарка сервера «{server['name']}» отклонена")
+        try:
+            await callback.message.edit_caption(
+                caption=f"❌ Аватарка сервера <b>«{e(server['name'])}»</b> отклонена.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await callback.answer("❌ Аватарка отклонена.")
+        await notify_user(
+            server["owner_id"],
+            f"❌ <b>Аватарка вашего сервера отклонена.</b>\n\n"
+            f"🖥 Сервер: <b>{e(server['name'])}</b>\n"
+            "Ты можешь загрузить другую через /мой_сервер.",
         )
 
 

@@ -67,12 +67,17 @@ async def init_db():
         """)
         await db.commit()
 
-        # Миграция: добавляем is_private если колонка ещё не существует
-        try:
-            await db.execute("ALTER TABLE servers ADD COLUMN is_private INTEGER DEFAULT 0")
-            await db.commit()
-        except Exception:
-            pass  # Колонка уже есть
+        # Миграции: добавляем колонки если их ещё нет
+        for col_sql in [
+            "ALTER TABLE servers ADD COLUMN is_private INTEGER DEFAULT 0",
+            "ALTER TABLE servers ADD COLUMN avatar_file_id TEXT",
+            "ALTER TABLE servers ADD COLUMN avatar_pending_file_id TEXT",
+        ]:
+            try:
+                await db.execute(col_sql)
+                await db.commit()
+            except Exception:
+                pass  # Колонка уже есть
 
 
 # ── Пользователи ──────────────────────────────────────────────────────────────
@@ -315,6 +320,66 @@ async def get_subscribers(server_id: int) -> list[int]:
             return [row[0] for row in rows]
 
 
+# ── Аватарки серверов ─────────────────────────────────────────────────────────
+
+async def set_avatar_pending(server_id: int, file_id: str):
+    """Сохраняет file_id как ожидающую модерации аватарку."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE servers SET avatar_pending_file_id = ? WHERE id = ?",
+            (file_id, server_id),
+        )
+        await db.commit()
+
+
+async def approve_avatar(server_id: int):
+    """Одобряет аватарку: pending → approved, очищает pending."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            """UPDATE servers
+               SET avatar_file_id = avatar_pending_file_id,
+                   avatar_pending_file_id = NULL
+               WHERE id = ?""",
+            (server_id,),
+        )
+        await db.commit()
+
+
+async def reject_avatar(server_id: int):
+    """Отклоняет аватарку: очищает pending, approved остаётся."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE servers SET avatar_pending_file_id = NULL WHERE id = ?",
+            (server_id,),
+        )
+        await db.commit()
+
+
+async def delete_avatar(server_id: int):
+    """Полностью удаляет аватарку (approved + pending)."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            "UPDATE servers SET avatar_file_id = NULL, avatar_pending_file_id = NULL WHERE id = ?",
+            (server_id,),
+        )
+        await db.commit()
+
+
+async def get_servers_with_pending_avatars():
+    """Серверы с аватаркой, ожидающей модерации."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM servers WHERE avatar_pending_file_id IS NOT NULL"
+        ) as cursor:
+            return await cursor.fetchall()
+
+
 # ── Запросы пароля ────────────────────────────────────────────────────────────
 
 async def create_pwd_request(server_id: int, requester_id: int) -> int:
@@ -381,6 +446,9 @@ LOG_LABELS = {
     "pwd_request_rejected":     "❌ Запрос пароля отклонён",
     "subscribed":               "🔔 Подписка",
     "unsubscribed":             "🔕 Отписка",
+    "avatar_uploaded":          "🖼 Аватарка загружена",
+    "avatar_approved":          "✅ Аватарка одобрена",
+    "avatar_rejected":          "❌ Аватарка отклонена",
 }
 
 
