@@ -38,3 +38,7 @@ async def backup_loop():
             print("Ошибка backup:", e)
 
         await asyncio.sleep(120)
+await bot.send_document(
+    ADMIN_ID,
+    FSInputFile("bot/lostminer.db")
+)
