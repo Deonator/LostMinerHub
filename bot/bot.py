@@ -1647,15 +1647,22 @@ async def btn_banlist(message: Message, state: FSMContext):
 # Запуск
 # ──────────────────────────────────────────
 async def main():
-    
     await db.init_db()
+
+    # Запускаем веб-сервер для Render
+    asyncio.create_task(start_web())
+
+    # Запускаем резервные копии
     asyncio.create_task(backup_loop())
-    # Middleware: блокировка глобально забаненных пользователей
+
+    # Middleware
     dp.message.outer_middleware(GlobalBanMiddleware())
     dp.callback_query.outer_middleware(GlobalBanMiddleware())
+
     await bot.delete_webhook(drop_pending_updates=True)
+
     logger.info("🤖 LostMiner бот запущен!")
-    asyncio.create_task(start_web())
+
     await dp.start_polling(bot)
 
 
