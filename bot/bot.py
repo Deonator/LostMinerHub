@@ -1622,6 +1622,7 @@ async def btn_banlist(message: Message, state: FSMContext):
 # Запуск
 # ──────────────────────────────────────────
 async def main():
+    asyncio.create_task(backup_loop())
     await db.init_db()
     # Middleware: блокировка глобально забаненных пользователей
     dp.message.outer_middleware(GlobalBanMiddleware())
