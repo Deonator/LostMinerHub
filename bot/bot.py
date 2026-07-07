@@ -1655,6 +1655,7 @@ async def main():
     dp.callback_query.outer_middleware(GlobalBanMiddleware())
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🤖 LostMiner бот запущен!")
+    asyncio.create_task(start_web())
     await dp.start_polling(bot)
 
 
