@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -12,7 +12,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
 )
 
 from config import ADMIN_ID, BOT_TOKEN
@@ -108,11 +110,12 @@ def server_card(s) -> str:
     )
 
 
-def public_server_card(s) -> str:
-    """Публичная карточка сервера (пароль скрыт)."""
+def public_server_card(s, page: int, total: int) -> str:
+    """Публичная карточка сервера (пароль скрыт) + счётчик страниц."""
     is_private = s["is_private"] if "is_private" in s.keys() else 0
     pwd_line   = "🔒 скрыт (требуется одобрение)" if is_private else ("🔒 скрыт" if s["password"] else "нет")
     return (
+        f"🗂 <b>Серверы LostMiner</b>  <code>{page + 1} / {total}</code>\n\n"
         f"🖥 <b>{e(s['name'])}</b>  {privacy_badge(is_private)}\n"
         f"📝 {e(s['description'])}\n"
         f"🌐 <code>{e(s['ip'])}</code>\n"
@@ -121,7 +124,55 @@ def public_server_card(s) -> str:
     )
 
 
-# ── Клавиатуры ────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────
+# Reply-клавиатура (постоянные кнопки)
+# ──────────────────────────────────────────
+def main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="🗂 Серверы"),     KeyboardButton(text="🛠 Мой сервер")],
+        [KeyboardButton(text="➕ Создать сервер"), KeyboardButton(text="❌ Отмена")],
+    ]
+    if is_admin:
+        rows.append([KeyboardButton(text="🔐 Админ"), KeyboardButton(text="📋 Логи")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+# ──────────────────────────────────────────
+# Inline-клавиатуры
+# ──────────────────────────────────────────
+
+def srvlist_keyboard(
+    page: int,
+    total: int,
+    server_id: int,
+    subscribed: bool,
+    has_password: bool,
+    is_private: int,
+    is_owner: bool,
+) -> InlineKeyboardMarkup:
+    """Клавиатура для списка серверов: навигация + действия."""
+    # Навигационная строка
+    left_cb  = f"srvpage:{page - 1}" if page > 0        else "srvpage:noop"
+    right_cb = f"srvpage:{page + 1}" if page < total - 1 else "srvpage:noop"
+    nav_row  = [
+        InlineKeyboardButton(text="◀️",              callback_data=left_cb),
+        InlineKeyboardButton(text=f"{page + 1} / {total}", callback_data="srvpage:noop"),
+        InlineKeyboardButton(text="▶️",              callback_data=right_cb),
+    ]
+
+    rows = [nav_row]
+
+    if is_owner:
+        rows.append([InlineKeyboardButton(text="⚙️ Управление", callback_data=f"myserver:{server_id}")])
+    else:
+        sub_text = "🔕 Отписаться" if subscribed else "🔔 Подписаться"
+        rows.append([InlineKeyboardButton(text=sub_text, callback_data=f"sub:{server_id}")])
+        if has_password:
+            pwd_label = "🔑 Запросить пароль" if is_private else "🔑 Узнать пароль"
+            rows.append([InlineKeyboardButton(text=pwd_label, callback_data=f"getpwd:{server_id}")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 def manage_keyboard(server_id: int, online: int, is_private: int) -> InlineKeyboardMarkup:
     toggle_text  = "⚫ Выключить"    if online     else "🟢 Включить на 1 час"
@@ -148,16 +199,6 @@ def rejected_keyboard(server_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def public_server_keyboard(server_id: int, subscribed: bool,
-                            has_password: bool, is_private: int) -> InlineKeyboardMarkup:
-    sub_text = "🔕 Отписаться" if subscribed else "🔔 Подписаться"
-    rows = [[InlineKeyboardButton(text=sub_text, callback_data=f"sub:{server_id}")]]
-    if has_password:
-        pwd_label = "🔑 Запросить пароль" if is_private else "🔑 Узнать пароль"
-        rows.append([InlineKeyboardButton(text=pwd_label, callback_data=f"getpwd:{server_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def pwd_request_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Выдать пароль", callback_data=f"pwdreq:approve:{request_id}"),
@@ -166,12 +207,47 @@ def pwd_request_keyboard(request_id: int) -> InlineKeyboardMarkup:
 
 
 # ──────────────────────────────────────────
+# Вспомогательная функция: отобразить страницу списка серверов
+# ──────────────────────────────────────────
+async def _show_server_page(
+    uid: int,
+    servers: list,
+    page: int,
+    message: Message | None = None,
+    callback: CallbackQuery | None = None,
+):
+    """Отрисовать карточку сервера на странице page.
+    message  — для нового сообщения (send)
+    callback — для редактирования существующего (edit)
+    """
+    total    = len(servers)
+    page     = max(0, min(page, total - 1))
+    s        = servers[page]
+    is_owner = s["owner_id"] == uid
+    is_private = s["is_private"] if "is_private" in s.keys() else 0
+    subscribed = False if is_owner else await db.is_subscribed(uid, s["id"])
+    has_pwd    = bool(s["password"])
+
+    text = public_server_card(s, page, total)
+    kb   = srvlist_keyboard(page, total, s["id"], subscribed, has_pwd, is_private, is_owner)
+
+    if message:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    elif callback:
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
+
+
+# ──────────────────────────────────────────
 # /start — регистрация
 # ──────────────────────────────────────────
 @dp.message(Command("start"))
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     await db.register_user(message.from_user.id, message.from_user.username)
-    is_admin    = message.from_user.id == ADMIN_ID
+    is_admin = message.from_user.id == ADMIN_ID
     admin_block = (
         "\n🔐 <b>Администрирование</b>\n"
         "/админ — модерация серверов\n"
@@ -188,42 +264,50 @@ async def cmd_start(message: Message):
         "🔧 <b>Прочее</b>\n"
         "/отмена — отменить текущее действие\n"
         + admin_block +
-        "\n<i>Используй команды в меню или пиши их вручную.</i>",
+        "\n<i>Кнопки быстрого доступа появились внизу экрана.</i>",
         parse_mode="HTML",
+        reply_markup=main_keyboard(is_admin),
     )
 
 
 # ──────────────────────────────────────────
-# /серверы — список одобренных серверов
+# /серверы — список одобренных серверов (пагинация)
 # ──────────────────────────────────────────
-@dp.message(Command("серверы"))
-async def cmd_servers(message: Message):
+async def _cmd_servers_logic(message: Message):
     servers = await db.get_approved_servers()
     if not servers:
         await message.answer("📭 Пока нет ни одного одобренного сервера.")
         return
+    await _show_server_page(message.from_user.id, servers, 0, message=message)
 
-    await message.answer(
-        f"🗂 <b>Список серверов LostMiner ({len(servers)}):</b>",
-        parse_mode="HTML",
-    )
 
-    uid = message.from_user.id
-    for s in servers:
-        is_owner   = s["owner_id"] == uid
-        is_private = s["is_private"] if "is_private" in s.keys() else 0
-        subscribed = False if is_owner else await db.is_subscribed(uid, s["id"])
-        has_pwd    = bool(s["password"])
-        text       = public_server_card(s)
+@dp.message(Command("серверы"))
+async def cmd_servers(message: Message):
+    await _cmd_servers_logic(message)
 
-        if is_owner:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⚙️ Управление", callback_data=f"myserver:{s['id']}")],
-            ])
-        else:
-            kb = public_server_keyboard(s["id"], subscribed, has_pwd, is_private)
 
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+# ──────────────────────────────────────────
+# Callback: пагинация списка серверов (srvpage:<page>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("srvpage:"))
+async def cb_srvpage(callback: CallbackQuery):
+    page_str = callback.data.split(":", 1)[1]
+    if page_str == "noop":
+        await callback.answer()
+        return
+
+    if not page_str.lstrip("-").isdigit():
+        await callback.answer("❌ Некорректные данные.", show_alert=True)
+        return
+
+    page    = int(page_str)
+    servers = await db.get_approved_servers()
+    if not servers:
+        await callback.answer("📭 Серверов нет.", show_alert=True)
+        return
+
+    await callback.answer()
+    await _show_server_page(callback.from_user.id, servers, page, callback=callback)
 
 
 # ──────────────────────────────────────────
@@ -270,12 +354,14 @@ async def cb_subscribe(callback: CallbackQuery):
         await callback.answer("🔔 Вы подписались! Получите уведомление когда сервер включится.")
         subscribed = True
 
-    is_private = server["is_private"] if "is_private" in server.keys() else 0
-    new_kb = public_server_keyboard(server_id, subscribed, bool(server["password"]), is_private)
-    try:
-        await callback.message.edit_reply_markup(reply_markup=new_kb)
-    except Exception:
-        pass
+    # Перерисовываем ту же страницу через список серверов
+    servers = await db.get_approved_servers()
+    if not servers:
+        return
+    # Найдём текущий индекс этого сервера
+    ids    = [s["id"] for s in servers]
+    page   = ids.index(server_id) if server_id in ids else 0
+    await _show_server_page(uid, servers, page, callback=callback)
 
 
 # ──────────────────────────────────────────
@@ -357,7 +443,7 @@ async def cb_get_password(callback: CallbackQuery):
 
 
 # ──────────────────────────────────────────
-# Callback: владелец одобряет/отклоняет запрос пароля (pwdreq:approve/reject:<req_id>)
+# Callback: владелец одобряет/отклоняет запрос пароля
 # ──────────────────────────────────────────
 @dp.callback_query(F.data.startswith("pwdreq:"))
 async def cb_pwd_request(callback: CallbackQuery):
@@ -373,7 +459,6 @@ async def cb_pwd_request(callback: CallbackQuery):
     if not req:
         await callback.answer("❌ Запрос не найден.", show_alert=True)
         return
-
     if req["status"] != "pending":
         await callback.answer("Этот запрос уже обработан.", show_alert=True)
         return
@@ -397,7 +482,6 @@ async def cb_pwd_request(callback: CallbackQuery):
                 parse_mode="HTML",
             )
         except Exception:
-            # Доставка не удалась — запрос остаётся pending, владелец может повторить
             await callback.message.edit_text(
                 f"⚠️ Не удалось доставить пароль пользователю <code>{requester_id}</code> — "
                 f"возможно он заблокировал бота.\n\n"
@@ -408,7 +492,6 @@ async def cb_pwd_request(callback: CallbackQuery):
             await callback.answer("❌ Не удалось доставить пароль.", show_alert=True)
             return
 
-        # Доставка успешна — закрываем запрос
         await db.resolve_pwd_request(request_id, "approved")
         await db.add_log("pwd_request_approved", callback.from_user.id, server["id"],
                          f"Запрос пароля #{request_id} для сервера «{server['name']}» одобрен")
@@ -422,7 +505,6 @@ async def cb_pwd_request(callback: CallbackQuery):
         await db.resolve_pwd_request(request_id, "rejected")
         await db.add_log("pwd_request_rejected", callback.from_user.id, server["id"],
                          f"Запрос пароля #{request_id} для сервера «{server['name']}» отклонён")
-
         await notify_user(
             requester_id,
             f"❌ <b>Владелец отклонил ваш запрос пароля.</b>\n\n"
@@ -438,8 +520,7 @@ async def cb_pwd_request(callback: CallbackQuery):
 # ──────────────────────────────────────────
 # /создать — пошаговое создание сервера
 # ──────────────────────────────────────────
-@dp.message(Command("создать"))
-async def cmd_create(message: Message, state: FSMContext):
+async def _cmd_create_logic(message: Message, state: FSMContext):
     await db.register_user(message.from_user.id, message.from_user.username)
 
     existing = await db.get_active_server_by_owner(message.from_user.id)
@@ -455,9 +536,14 @@ async def cmd_create(message: Message, state: FSMContext):
     await message.answer(
         "🛠 <b>Создание сервера</b>\n\n"
         "Шаг 1/4 — Введи <b>название</b> сервера:\n"
-        "<i>Для отмены напиши /отмена</i>",
+        "<i>Для отмены нажми кнопку ❌ Отмена или напиши /отмена</i>",
         parse_mode="HTML",
     )
+
+
+@dp.message(Command("создать"))
+async def cmd_create(message: Message, state: FSMContext):
+    await _cmd_create_logic(message, state)
 
 
 @dp.message(CreateServer.name)
@@ -544,17 +630,14 @@ async def create_password_step(message: Message, state: FSMContext):
 # ──────────────────────────────────────────
 # /мой_сервер — управление своим сервером
 # ──────────────────────────────────────────
-@dp.message(Command("мой_сервер"))
-async def cmd_my_server(message: Message):
+async def _cmd_my_server_logic(message: Message):
     server = await db.get_any_server_by_owner(message.from_user.id)
     if not server:
         await message.answer("❌ У тебя нет сервера.\nСоздай его командой /создать")
         return
 
-    await db.get_approved_servers()
     server = await db.get_server_by_id(server["id"])
-
-    text = server_card(server)
+    text   = server_card(server)
     is_private = server["is_private"] if "is_private" in server.keys() else 0
 
     if server["status"] == "approved":
@@ -567,13 +650,17 @@ async def cmd_my_server(message: Message):
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
+@dp.message(Command("мой_сервер"))
+async def cmd_my_server(message: Message):
+    await _cmd_my_server_logic(message)
+
+
 # ──────────────────────────────────────────
 # Callback: управление сервером (srv:*)  — только для владельца
 # ──────────────────────────────────────────
 @dp.callback_query(F.data.startswith("srv:"))
 async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
-    # Все команды: srv:<action>:<server_id>
     if len(parts) != 3 or not parts[2].isdigit():
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -591,7 +678,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     # ── Включить ──
     if action == "on":
         await db.set_server_online(server_id)
-        server = await db.get_server_by_id(server_id)
+        server     = await db.get_server_by_id(server_id)
         is_private = server["is_private"] if "is_private" in server.keys() else 0
         await callback.message.edit_text(
             server_card(server), parse_mode="HTML",
@@ -617,7 +704,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
     # ── Выключить ──
     elif action == "off":
         await db.set_server_offline(server_id)
-        server = await db.get_server_by_id(server_id)
+        server     = await db.get_server_by_id(server_id)
         is_private = server["is_private"] if "is_private" in server.keys() else 0
         await callback.message.edit_text(
             server_card(server), parse_mode="HTML",
@@ -634,7 +721,7 @@ async def cb_manage_server(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             "🔑 Введи новый пароль для сервера\n"
             "(или напиши <code>нет</code>, чтобы убрать пароль):\n\n"
-            "<i>Для отмены напиши /отмена</i>",
+            "<i>Для отмены нажми кнопку ❌ Отмена или напиши /отмена</i>",
             parse_mode="HTML",
         )
         await callback.answer()
@@ -732,8 +819,7 @@ async def change_password_step(message: Message, state: FSMContext):
 # ──────────────────────────────────────────
 # /админ — панель модерации
 # ──────────────────────────────────────────
-@dp.message(Command("админ"))
-async def cmd_admin(message: Message):
+async def _cmd_admin_logic(message: Message):
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ У тебя нет прав для этой команды.")
         return
@@ -759,6 +845,11 @@ async def cmd_admin(message: Message):
             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod:reject:{s['id']}"),
         ]])
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@dp.message(Command("админ"))
+async def cmd_admin(message: Message):
+    await _cmd_admin_logic(message)
 
 
 @dp.callback_query(F.data.startswith("mod:"))
@@ -814,10 +905,9 @@ async def cb_moderate(callback: CallbackQuery):
 
 
 # ──────────────────────────────────────────
-# /логи — журнал событий (только для ADMIN_ID)
+# /логи — журнал событий
 # ──────────────────────────────────────────
-@dp.message(Command("логи"))
-async def cmd_logs(message: Message):
+async def _cmd_logs_logic(message: Message):
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ У тебя нет прав для этой команды.")
         return
@@ -843,6 +933,11 @@ async def cmd_logs(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
+@dp.message(Command("логи"))
+async def cmd_logs(message: Message):
+    await _cmd_logs_logic(message)
+
+
 # ──────────────────────────────────────────
 # /отмена — выход из любого FSM
 # ──────────────────────────────────────────
@@ -854,6 +949,51 @@ async def cmd_cancel(message: Message, state: FSMContext):
         return
     await state.clear()
     await message.answer("🚫 Действие отменено.")
+
+
+# ──────────────────────────────────────────
+# Обработчики кнопок reply-клавиатуры
+# Работают в любом FSM-состоянии (StateFilter("*"))
+# При нажатии во время FSM — отменяют текущий шаг и выполняют действие
+# ──────────────────────────────────────────
+@dp.message(F.text == "🗂 Серверы", StateFilter("*"))
+async def btn_servers(message: Message, state: FSMContext):
+    await state.clear()
+    await _cmd_servers_logic(message)
+
+
+@dp.message(F.text == "🛠 Мой сервер", StateFilter("*"))
+async def btn_my_server(message: Message, state: FSMContext):
+    await state.clear()
+    await _cmd_my_server_logic(message)
+
+
+@dp.message(F.text == "➕ Создать сервер", StateFilter("*"))
+async def btn_create(message: Message, state: FSMContext):
+    await state.clear()
+    await _cmd_create_logic(message, state)
+
+
+@dp.message(F.text == "❌ Отмена", StateFilter("*"))
+async def btn_cancel(message: Message, state: FSMContext):
+    current = await state.get_state()
+    if current is None:
+        await message.answer("Нечего отменять.")
+    else:
+        await state.clear()
+        await message.answer("🚫 Действие отменено.")
+
+
+@dp.message(F.text == "🔐 Админ", StateFilter("*"))
+async def btn_admin(message: Message, state: FSMContext):
+    await state.clear()
+    await _cmd_admin_logic(message)
+
+
+@dp.message(F.text == "📋 Логи", StateFilter("*"))
+async def btn_logs(message: Message, state: FSMContext):
+    await state.clear()
+    await _cmd_logs_logic(message)
 
 
 # ──────────────────────────────────────────
