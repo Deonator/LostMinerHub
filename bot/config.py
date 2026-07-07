@@ -1,5 +1,7 @@
-# Конфигурация бота
-# Замените на ваши значения
+import os
+from dotenv import load_dotenv
 
-BOT_TOKEN = "7762497895:AAH-WACQ1rGpHSP43J8zwHEATU51abhVnYk"  # Получите у @BotFather
-ADMIN_ID = 7572151869  # Ваш Telegram ID (узнать у @userinfobot)
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
