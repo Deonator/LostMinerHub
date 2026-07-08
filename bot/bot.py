@@ -22,6 +22,7 @@ from aiogram.types import (
 
 from config import ADMIN_ID, BOT_TOKEN
 import database as db
+from translator import t
 from aiohttp import web
 import asyncio
 import os
