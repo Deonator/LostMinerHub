@@ -105,6 +105,13 @@ async def init_db():
                 mark_backup()
             except Exception:
                 pass  # Колонка уже есть
+        try:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'"
+            )
+            await db.commit()
+        except Exception:
+            pass
 
 
 # ── Пользователи ──────────────────────────────────────────────────────────────
