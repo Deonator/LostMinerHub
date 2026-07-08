@@ -653,3 +653,12 @@ async def get_logs(limit: int = 40):
             "SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ?", (limit,)
         ) as cursor:
             return await cursor.fetchall()
+
+async def set_language(telegram_id: int, language: str):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute(
+            "UPDATE users SET language = ? WHERE telegram_id = ?",
+            (language, telegram_id),
+        )
+        await db.commit()
+        mark_backup()
