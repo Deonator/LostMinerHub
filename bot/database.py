@@ -1,6 +1,15 @@
 import aiosqlite
 import os
+import asyncio
 
+backup_needed = False
+
+
+def mark_backup():
+
+    global backup_needed
+
+    backup_needed = True
 DB_PATH = os.path.join(os.path.dirname(__file__), "lostminer.db")
 
 CONNECT_KWARGS = {"timeout": 10}
@@ -83,7 +92,7 @@ async def init_db():
             )
         """)
         await db.commit()
-
+        mark_backup()
         # Миграции: добавляем колонки если их ещё нет
         for col_sql in [
             "ALTER TABLE servers ADD COLUMN is_private INTEGER DEFAULT 0",
@@ -93,6 +102,7 @@ async def init_db():
             try:
                 await db.execute(col_sql)
                 await db.commit()
+                mark_backup()
             except Exception:
                 pass  # Колонка уже есть
 
@@ -107,8 +117,8 @@ async def register_user(telegram_id: int, username: str | None):
             (telegram_id, username),
         )
         await db.commit()
-
-
+        mark_backup()
+        
 async def get_user(telegram_id: int):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
@@ -155,6 +165,7 @@ async def create_server(owner_id: int, name: str, description: str, ip: str, pas
             (owner_id, name, description, ip, password),
         )
         await db.commit()
+        mark_backup()
         return cursor.lastrowid
 
 
@@ -179,6 +190,7 @@ async def get_approved_servers():
                  AND expires_at <= datetime('now')"""
         )
         await db.commit()
+        
 
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -195,7 +207,7 @@ async def set_server_status(server_id: int, status: str):
             (status, server_id),
         )
         await db.commit()
-
+        mark_backup()
 
 async def set_server_online(server_id: int):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
@@ -207,7 +219,7 @@ async def set_server_online(server_id: int):
             (server_id,),
         )
         await db.commit()
-
+        mark_backup()
 
 async def set_server_offline(server_id: int):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
@@ -217,7 +229,7 @@ async def set_server_offline(server_id: int):
             (server_id,),
         )
         await db.commit()
-
+        mark_backup()
 
 async def toggle_server_private(server_id: int) -> int:
     """Переключает тип сервера. Возвращает новое значение is_private."""
@@ -227,7 +239,9 @@ async def toggle_server_private(server_id: int) -> int:
             "UPDATE servers SET is_private = CASE WHEN is_private = 1 THEN 0 ELSE 1 END WHERE id = ?",
             (server_id,),
         )
+        
         await db.commit()
+        mark_backup()
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT is_private FROM servers WHERE id = ?", (server_id,)
@@ -244,7 +258,7 @@ async def update_server_password(server_id: int, password: str):
             (password, server_id),
         )
         await db.commit()
-
+        mark_backup()
 
 async def get_server_by_id(server_id: int):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
@@ -268,6 +282,7 @@ async def delete_server(server_id: int, owner_id: int) -> bool:
             (server_id, owner_id),
         )
         await db.commit()
+        mark_backup()
         return cursor.rowcount > 0
 
 
@@ -289,6 +304,7 @@ async def delete_rejected_servers(owner_id: int):
             (owner_id,),
         )
         await db.commit()
+        mark_backup()
 
 
 # ── Подписки ──────────────────────────────────────────────────────────────────
@@ -302,6 +318,7 @@ async def subscribe(user_id: int, server_id: int) -> bool:
                 (user_id, server_id),
             )
             await db.commit()
+            mark_backup()
             return True
         except aiosqlite.IntegrityError:
             return False
@@ -315,6 +332,7 @@ async def unsubscribe(user_id: int, server_id: int) -> bool:
             (user_id, server_id),
         )
         await db.commit()
+        mark_backup()
         return cursor.rowcount > 0
 
 
@@ -350,6 +368,7 @@ async def set_avatar_pending(server_id: int, file_id: str):
             (file_id, server_id),
         )
         await db.commit()
+        mark_backup()
 
 
 async def approve_avatar(server_id: int):
@@ -364,6 +383,7 @@ async def approve_avatar(server_id: int):
             (server_id,),
         )
         await db.commit()
+        mark_backup()
 
 
 async def reject_avatar(server_id: int):
@@ -375,6 +395,7 @@ async def reject_avatar(server_id: int):
             (server_id,),
         )
         await db.commit()
+        mark_backup()
 
 
 async def delete_avatar(server_id: int):
@@ -386,6 +407,7 @@ async def delete_avatar(server_id: int):
             (server_id,),
         )
         await db.commit()
+        mark_backup()
 
 
 async def get_servers_with_pending_avatars():
@@ -410,6 +432,7 @@ async def create_pwd_request(server_id: int, requester_id: int) -> int:
             (server_id, requester_id),
         )
         await db.commit()
+        mark_backup()
         return cursor.lastrowid
 
 
@@ -446,6 +469,7 @@ async def resolve_pwd_request(request_id: int, status: str):
             (status, request_id),
         )
         await db.commit()
+        mark_backup()
 
 
 # ── Серверные баны ────────────────────────────────────────────────────────────
@@ -460,6 +484,7 @@ async def ban_server_user(server_id: int, user_id: int) -> bool:
                 (server_id, user_id),
             )
             await db.commit()
+            mark_backup()
             return True
         except aiosqlite.IntegrityError:
             return False
@@ -474,6 +499,7 @@ async def unban_server_user(server_id: int, user_id: int) -> bool:
             (server_id, user_id),
         )
         await db.commit()
+        mark_backup()
         return cursor.rowcount > 0
 
 
@@ -490,6 +516,7 @@ async def unban_server_user_by_ban_id(ban_id: int) -> tuple[int, int] | None:
             return None
         await db.execute("DELETE FROM server_bans WHERE id = ?", (ban_id,))
         await db.commit()
+        mark_backup()
         return row["server_id"], row["banned_user_id"]
 
 
@@ -535,6 +562,7 @@ async def ban_user_globally(user_id: int) -> bool:
                 "INSERT INTO bot_bans (user_id) VALUES (?)", (user_id,)
             )
             await db.commit()
+            mark_backup()
             return True
         except aiosqlite.IntegrityError:
             return False
@@ -548,6 +576,7 @@ async def unban_user_globally(user_id: int) -> bool:
             "DELETE FROM bot_bans WHERE user_id = ?", (user_id,)
         )
         await db.commit()
+        mark_backup()
         return cursor.rowcount > 0
 
 
@@ -606,6 +635,7 @@ async def add_log(event: str, actor_id: int | None = None,
             (event, actor_id, server_id, details),
         )
         await db.commit()
+        mark_backup()
 
 
 async def get_logs(limit: int = 40):
