@@ -25,7 +25,12 @@ import database as db
 from aiohttp import web
 import asyncio
 import os
+import asyncio
 
+from backup import (
+    download_backup,
+    backup_loop
+)
 
 async def health(request):
     return web.Response(text="Bot is alive")
@@ -1641,28 +1646,54 @@ async def btn_banlist(message: Message, state: FSMContext):
     await state.clear()
     await _show_global_banlist(message)
 
-
 # ──────────────────────────────────────────
 # Запуск
 # ──────────────────────────────────────────
+
+from backup import download_backup, backup_loop
+
+
 async def main():
+
+    # Сначала восстанавливаем базу из GitHub
+    await download_backup()
+
+    # Инициализируем SQLite
     await db.init_db()
+
 
     # Запускаем веб-сервер для Render
     asyncio.create_task(start_web())
 
-    # Запускаем резервные копии
+
+    # Запускаем автоматические резервные копии
+    asyncio.create_task(
+        backup_loop()
+    )
 
 
     # Middleware
-    dp.message.outer_middleware(GlobalBanMiddleware())
-    dp.callback_query.outer_middleware(GlobalBanMiddleware())
+    dp.message.outer_middleware(
+        GlobalBanMiddleware()
+    )
 
-    await bot.delete_webhook(drop_pending_updates=True)
+    dp.callback_query.outer_middleware(
+        GlobalBanMiddleware()
+    )
 
-    logger.info("🤖 LostMiner бот запущен!")
+
+    await bot.delete_webhook(
+        drop_pending_updates=True
+    )
+
+
+    logger.info(
+        "🤖 LostMiner бот запущен!"
+    )
+
 
     await dp.start_polling(bot)
+
 
 
 if __name__ == "__main__":
