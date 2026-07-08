@@ -391,30 +391,56 @@ async def _show_server_page(
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    await db.register_user(message.from_user.id, message.from_user.username)
+
+    await db.register_user(
+        message.from_user.id,
+        message.from_user.username
+    )
+
+    # Получаем язык пользователя
     lang = await db.get_language(message.from_user.id)
+
+    # Автоопределение языка Telegram при первом входе
+    telegram_lang = message.from_user.language_code
+
+    if telegram_lang == "pt":
+        telegram_lang = "pt_br"
+
+    if telegram_lang in ["ru", "en", "es", "pt_br"]:
+        await db.set_language(
+            message.from_user.id,
+            telegram_lang
+        )
+        lang = telegram_lang
+
+
     is_admin = message.from_user.id == ADMIN_ID
+
     admin_block = (
-        "\n🔐 <b>Администрирование</b>\n"
-        "/админ — модерация серверов\n"
-        "/логи — журнал событий\n"
+        "\n🔐 <b>" + t("administration", lang) + "</b>\n"
+        "/админ — " + t("admin_servers", lang) + "\n"
+        "/логи — " + t("logs", lang) + "\n"
     ) if is_admin else ""
+
+
     await message.answer(
-        "👋 Добро пожаловать в <b>LostMiner</b> — каталог игровых серверов!\n\n"
-        "📋 <b>Команды:</b>\n\n"
-        "🗂 <b>Серверы</b>\n"
-        "/серверы — список всех одобренных серверов\n\n"
-        "🛠 <b>Мой сервер</b>\n"
-        "/создать — добавить свой сервер\n"
-        "/мой_сервер — управление сервером (вкл/выкл, тип, пароль)\n\n"
-        "🔧 <b>Прочее</b>\n"
-        "/отмена — отменить текущее действие\n"
-        + admin_block +
-        "\n<i>Кнопки быстрого доступа появились внизу экрана.</i>",
+        t("welcome", lang)
+        + "\n\n"
+        + t("commands", lang)
+        + "\n\n"
+        + t("servers_command", lang)
+        + "\n\n"
+        + t("my_server_command", lang)
+        + "\n\n"
+        + t("other_command", lang)
+        + admin_block
+        + "\n<i>"
+        + t("buttons_hint", lang)
+        + "</i>",
+        
         parse_mode="HTML",
         reply_markup=main_keyboard(is_admin),
     )
-
 
 # ──────────────────────────────────────────
 # /серверы — список одобренных серверов (пагинация)
