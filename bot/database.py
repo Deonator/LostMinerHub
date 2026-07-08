@@ -662,3 +662,16 @@ async def set_language(telegram_id: int, language: str):
         )
         await db.commit()
         mark_backup()
+
+async def get_language(telegram_id: int) -> str:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        async with db.execute(
+            "SELECT language FROM users WHERE telegram_id = ?",
+            (telegram_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+            if row and row[0]:
+                return row[0]
+
+            return "ru"
