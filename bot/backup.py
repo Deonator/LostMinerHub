@@ -3,6 +3,19 @@ import base64
 import aiohttp
 import asyncio
 import logging
+import database
+
+async def backup_loop():
+
+    while True:
+
+        await asyncio.sleep(120)
+
+        if database.backup_needed:
+
+            await upload_backup()
+
+            database.backup_needed = False
 
 DB_PATH = "bot/lostminer.db"
 
