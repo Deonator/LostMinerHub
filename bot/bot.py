@@ -392,6 +392,7 @@ async def _show_server_page(
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await db.register_user(message.from_user.id, message.from_user.username)
+    lang = await db.get_language(message.from_user.id)
     is_admin = message.from_user.id == ADMIN_ID
     admin_block = (
         "\n🔐 <b>Администрирование</b>\n"
