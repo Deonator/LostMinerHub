@@ -98,6 +98,9 @@ async def init_db():
             "ALTER TABLE servers ADD COLUMN is_private INTEGER DEFAULT 0",
             "ALTER TABLE servers ADD COLUMN avatar_file_id TEXT",
             "ALTER TABLE servers ADD COLUMN avatar_pending_file_id TEXT",
+            "ALTER TABLE servers ADD COLUMN pending_name TEXT",
+            "ALTER TABLE servers ADD COLUMN pending_description TEXT",
+            "ALTER TABLE servers ADD COLUMN pending_ip TEXT",
         ]:
             try:
                 await db.execute(col_sql)
@@ -309,6 +312,87 @@ async def delete_rejected_servers(owner_id: int):
         await db.execute(
             "DELETE FROM servers WHERE owner_id = ? AND status = 'rejected'",
             (owner_id,),
+        )
+        await db.commit()
+        mark_backup()
+
+
+# ── Редактирование данных сервера (название / описание / IP) ──────────────────
+# Правки уходят на модерацию так же, как аватарка: сохраняются в pending_*
+# колонках, реальные данные меняются только после approve_server_edit().
+
+async def request_server_edit(server_id: int, field: str, new_value: str):
+    """Сохраняет предложенное значение поля (name/description/ip) как ожидающее модерации."""
+    column = {
+        "name": "pending_name",
+        "description": "pending_description",
+        "ip": "pending_ip",
+    }[field]
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            f"UPDATE servers SET {column} = ? WHERE id = ?",
+            (new_value, server_id),
+        )
+        await db.commit()
+        mark_backup()
+
+
+def has_pending_edit(server_row) -> bool:
+    """Проверяет, есть ли у уже загруженной строки сервера ожидающая правка.
+    Синхронная функция — просто читает поля из уже полученной строки,
+    в БД не ходит."""
+    keys = server_row.keys()
+    return any(
+        server_row[col] for col in ("pending_name", "pending_description", "pending_ip")
+        if col in keys
+    )
+
+
+async def get_servers_with_pending_edits():
+    """Серверы, у которых есть хотя бы одно поле на модерации."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM servers
+               WHERE pending_name IS NOT NULL
+                  OR pending_description IS NOT NULL
+                  OR pending_ip IS NOT NULL"""
+        ) as cursor:
+            return await cursor.fetchall()
+
+
+async def approve_server_edit(server_id: int):
+    """Переносит все pending_* значения в реальные колонки и очищает pending_*."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            """UPDATE servers SET
+                   name        = COALESCE(pending_name, name),
+                   description = COALESCE(pending_description, description),
+                   ip          = COALESCE(pending_ip, ip),
+                   pending_name = NULL,
+                   pending_description = NULL,
+                   pending_ip = NULL
+               WHERE id = ?""",
+            (server_id,),
+        )
+        await db.commit()
+        mark_backup()
+
+
+async def reject_server_edit(server_id: int):
+    """Отклоняет правку: просто очищает pending_* колонки, реальные данные не трогает."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute(
+            """UPDATE servers SET
+                   pending_name = NULL,
+                   pending_description = NULL,
+                   pending_ip = NULL
+               WHERE id = ?""",
+            (server_id,),
         )
         await db.commit()
         mark_backup()
@@ -630,6 +714,9 @@ LOG_LABELS = {
     "server_unban":             "✅ Серверный разбан",
     "global_ban":               "🚫 Глобальный бан",
     "global_unban":             "✅ Глобальный разбан",
+    "edit_requested":           "✏️ Правка отправлена на модерацию",
+    "edit_approved":            "✅ Правка одобрена",
+    "edit_rejected":            "❌ Правка отклонена",
 }
 
 
