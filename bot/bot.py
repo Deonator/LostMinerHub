@@ -1924,59 +1924,6 @@ async def btn_banlist(message: Message, state: FSMContext):
     await state.clear()
     await _show_global_banlist(message)
 
-# ──────────────────────────────────────────
-# Запуск
-# ──────────────────────────────────────────
-
-from backup import download_backup, backup_loop
-
-
-async def main():
-
-    # Сначала восстанавливаем базу из GitHub
-    await download_backup()
-
-    # Инициализируем SQLite
-    await db.init_db()
-
-
-    # Запускаем веб-сервер для Render
-    asyncio.create_task(start_web())
-
-
-    # Запускаем автоматические резервные копии
-    asyncio.create_task(
-        backup_loop()
-    )
-
-
-    # Middleware
-    dp.message.outer_middleware(
-        GlobalBanMiddleware()
-    )
-
-    dp.callback_query.outer_middleware(
-        GlobalBanMiddleware()
-    )
-
-
-    await bot.delete_webhook(
-        drop_pending_updates=True
-    )
-
-
-    logger.info(
-        "🤖 LostMiner бот запущен!"
-    )
-
-
-    await dp.start_polling(bot)
-
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
 @dp.message(Command("удалить_сервер"))
 async def delete_server_admin(message: Message):
 
@@ -2035,3 +1982,58 @@ async def delete_server_admin(message: Message):
     await message.answer(
         f"✅ Сервер «{server_name}» удалён."
     )
+
+
+# ──────────────────────────────────────────
+# Запуск
+# ──────────────────────────────────────────
+
+from backup import download_backup, backup_loop
+
+
+async def main():
+
+    # Сначала восстанавливаем базу из GitHub
+    await download_backup()
+
+    # Инициализируем SQLite
+    await db.init_db()
+
+
+    # Запускаем веб-сервер для Render
+    asyncio.create_task(start_web())
+
+
+    # Запускаем автоматические резервные копии
+    asyncio.create_task(
+        backup_loop()
+    )
+
+
+    # Middleware
+    dp.message.outer_middleware(
+        GlobalBanMiddleware()
+    )
+
+    dp.callback_query.outer_middleware(
+        GlobalBanMiddleware()
+    )
+
+
+    await bot.delete_webhook(
+        drop_pending_updates=True
+    )
+
+
+    logger.info(
+        "🤖 LostMiner бот запущен!"
+    )
+
+
+    await dp.start_polling(bot)
+
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
