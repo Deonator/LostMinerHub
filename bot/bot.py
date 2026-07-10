@@ -1976,3 +1976,66 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+@dp.message(Command("удалить_сервер"))
+async def delete_server_admin(message: Message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    args = message.text.split()
+
+    if len(args) != 2:
+        await message.answer(
+            "Использование:\n/удалить_сервер ID"
+        )
+        return
+
+    try:
+        server_id = int(args[1])
+    except ValueError:
+        await message.answer(
+            "❌ ID должен быть числом."
+        )
+        return
+
+    server = await db.get_server_by_id(server_id)
+
+    if not server:
+        await message.answer(
+            "❌ Сервер не найден."
+        )
+        return
+
+    async with aiosqlite.connect(
+        db.DB_PATH,
+        **db.CONNECT_KWARGS
+    ) as database:
+
+        await database.execute(
+            "DELETE FROM subscriptions WHERE server_id = ?",
+            (server_id,)
+        )
+
+        await database.execute(
+            "DELETE FROM password_requests WHERE server_id = ?",
+            (server_id,)
+        )
+
+        await database.execute(
+            "DELETE FROM server_bans WHERE server_id = ?",
+            (server_id,)
+        )
+
+        await database.execute(
+            "DELETE FROM servers WHERE id = ?",
+            (server_id,)
+        )
+
+        await database.commit()
+
+    db.mark_backup()
+
+    await message.answer(
+        f"✅ Сервер {server_id} удалён."
+    )
