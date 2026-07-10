@@ -1983,29 +1983,25 @@ async def delete_server_admin(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    args = message.text.split()
+    args = message.text.split(maxsplit=1)
 
     if len(args) != 2:
         await message.answer(
-            "Использование:\n/удалить_сервер ID"
+            "Использование:\n/удалить_сервер Название сервера"
         )
         return
 
-    try:
-        server_id = int(args[1])
-    except ValueError:
-        await message.answer(
-            "❌ ID должен быть числом."
-        )
-        return
+    server_name = args[1]
 
-    server = await db.get_server_by_id(server_id)
+    server = await db.get_server_by_name(server_name)
 
     if not server:
         await message.answer(
             "❌ Сервер не найден."
         )
         return
+
+    server_id = server["id"]
 
     async with aiosqlite.connect(
         db.DB_PATH,
@@ -2037,5 +2033,5 @@ async def delete_server_admin(message: Message):
     db.mark_backup()
 
     await message.answer(
-        f"✅ Сервер {server_id} удалён."
+        f"✅ Сервер «{server_name}» удалён."
     )
