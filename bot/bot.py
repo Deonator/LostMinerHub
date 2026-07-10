@@ -19,7 +19,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     TelegramObject,
 )
-
+import aiosqlite
 from config import ADMIN_ID, BOT_TOKEN
 import database as db
 from translator import t
