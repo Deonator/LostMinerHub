@@ -769,7 +769,7 @@ async def get_server_by_name(name: str):
         db.row_factory = aiosqlite.Row
 
         async with db.execute(
-            "SELECT * FROM servers WHERE LOWER(name) = LOWER(?)",
-            (name,)
+            "SELECT * FROM servers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))",
+            (name,),
         ) as cursor:
             return await cursor.fetchone()
