@@ -762,3 +762,14 @@ async def get_language(telegram_id: int) -> str:
                 return row[0]
 
             return "ru"
+async def get_server_by_name(name: str):
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+
+        db.row_factory = aiosqlite.Row
+
+        async with db.execute(
+            "SELECT * FROM servers WHERE LOWER(name) = LOWER(?)",
+            (name,)
+        ) as cursor:
+            return await cursor.fetchone()
