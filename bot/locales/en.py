@@ -141,9 +141,9 @@ TEXTS = {
 
 "cant_subscribe_own": "❌ Cannot subscribe to your server.",
 
-"log_unsubscribed": "@{username} unsubscribed from "{name}",
+"log_unsubscribed": "@{username} unsubscribed from \"{name}\"",
 
-"log_subscribed": "@{username} subscribed to "{name}",
+"log_subscribed": "@{username} subscribed to \"{name}\"",
 
 "unsubscribed": "🔕 You have unsubscribed from the server.",
 
@@ -172,11 +172,11 @@ TEXTS = {
 🆔 ID: <code>{user_id}</code>
 """,
 
-"log_password_requested": "{username} received the password for server "{name}"",
+"log_password_requested": "{username} received the password for server \"{name}\"",
 
 "request_already_sent": "⏳ Request already sent. Wait for owner approval.",
 
-"request_sent": "📨Request sent. Await owner approval.",
+"request_sent": "📨 Request sent. Await owner approval.",
 
 "owner_private_password_requested": """
 🔐 <b>Requesting a private server password!</b>
@@ -188,7 +188,7 @@ TEXTS = {
 Give this user a password?
 """,
 
-"log_private_password_requested": "{username} requested a password for the private server "{name}"",
+"log_private_password_requested": "{username} requested a password for the private server \"{name}\"",
 
 "request_not_found": "❌ Request not found.",
 
@@ -259,7 +259,7 @@ Step 4/4 — Enter your password to log in to the server
 (or enter none if there is no password):
 """,
 
-"log_server_created": "@{username} created the server "{name}"",
+"log_server_created": "@{username} created the server \"{name}\"",
 
 "server_submitted": """
 ✅ <b>Server submitted for moderation!</b>
@@ -285,7 +285,7 @@ Use /admin to check.
 
 "server_turned_on_alert": "🟢 Server turned on for 1 hour!",
 
-"log_server_online": "Server "{name}" has been turned on by its owner",
+"log_server_online": "Server \"{name}\" has been turned on by its owner",
 
 "pwd_hint_request": "🔑 Request password — button in /servers",
 
@@ -302,7 +302,7 @@ Use /admin to check.
 
 "server_turned_off_alert": "⚫ The server is offline.",
 
-"log_server_offline": "Server "{name}" has been turned off by its owner.",
+"log_server_offline": "Server \"{name}\" has been turned off by its owner.",
 
 "change_password_prompt": """
 🔑 Enter a new server password
@@ -317,9 +317,9 @@ Use /admin to check.
 
 "server_type_changed_alert": "Server is now {label}.",
 
-"log_server_type_changed": "Server "{name}" has become {type}",
+"log_server_type_changed": "Server \"{name}\" has become {type}",
 
-"banlist_header": "🚫 <b>Server ban list "{name}"</b>\n\n",
+"banlist_header": "🚫 <b>Server ban list \"{name}\"</b>\n\n",
 
 "banlist_count": "Banned users: <b>{count}</b>",
 
@@ -365,7 +365,7 @@ You can create a new server with the /create command
 
 "state_error": "❌ Something went wrong. Try again via /my_server",
 
-"log_password_changed": "The password for server "{name}" has been changed",
+"log_password_changed": "The password for server \"{name}\" has been changed",
 
 "password_updated": "✅ Password updated: {password}\n\nServer management: /my_server",
 
@@ -375,7 +375,7 @@ You can create a new server with the /create command
 
 "cant_ban_admin": "❌ You can't ban an administrator.",
 
-"log_server_ban": "User {user_id} has been banned on server "{name}",
+"log_server_ban": "User {user_id} has been banned on server \"{name}\"",
 
 "server_ban_success": """
 🚫 User <code>{user_id}</code> has been banned on server <b>"{name}"</b>.
@@ -393,7 +393,7 @@ You can no longer request a password for this server.
 
 "ban_record_not_found": "Record not found.",
 
-"log_server_unban": "User {user_id} has been unbanned from server "{name}"",
+"log_server_unban": "User {user_id} has been unbanned from server \"{name}\"",
 
 "server_unban_notify": """
 ✅ You have been unbanned from server <b>"{name}"</b>.
@@ -404,7 +404,7 @@ You can now request a password again.
 
 "avatar_not_photo": "❌ Please send a <b>photo</b> (not a file).\nTo cancel, click ❌ Cancel.",
 
-"log_avatar_uploaded": "Server avatar "{name}" has been sent for moderation.",
+"log_avatar_uploaded": "Server avatar \"{name}\" has been sent for moderation.",
 
 "avatar_submitted": "📨 <b>Avatar has been sent for moderation!</b>\n\nAfter approval by the administrator, it will appear on the server card.",
 
@@ -439,7 +439,7 @@ Use /admin to verify.
 👤 Owner: <code>{owner_id}</code>
 """,
 
-"avatar_upload_failed": "⚠️ Failed to upload server avatar "{name}".",
+"avatar_upload_failed": "⚠️ Failed to upload server avatar \"{name}\".",
 
 "server_approved_edit": "✅ Server <b>«{name}»</b> approved.",
 
@@ -452,7 +452,7 @@ Manage it via /my_server
 "server_rejected_edit": "❌ Server <b>«{name}»</b> rejected.",
 
 "server_rejected_notify": """
-❌ <b>Your server "{name}" Rejected.
+❌ <b>Your server "{name}" was rejected.</b>
 
 Delete it and create a new one with the /create command
 """,
@@ -470,7 +470,7 @@ Delete it and create a new one with the /create command
 It is now displayed in /my_server.
 """,
 
-"avatar_rejected_edit": "❌ The server avatar <b>"{name}"</b> has been rejected.",
+"avatar_rejected_edit": "❌ The server avatar <b>\"{name}\"</b> has been rejected.",
 
 "avatar_rejected_alert": "❌ Avatar rejected.",
 
@@ -480,6 +480,7 @@ It is now displayed in /my_server.
 🖥 Server: <b>{name}</b>
 You can upload a different one via /my_server.
 """,
+
 "global_ban_success": "🚫 User <code>{user_id}</code> has been globally banned.",
 
 "global_ban_notify": "🚫 <b>You have been banned from the bot by an administrator.</b>",
@@ -502,7 +503,7 @@ You can upload a different one via /my_server.
 
 "enter_numeric_id": "❌ Enter numeric Telegram ID:",
 
-"global_banlist_empty": "✅ Global The ban list is empty.",
+"global_banlist_empty": "✅ Global ban list is empty.",
 
 "global_banlist_header": "🚫 <b>Global ban list ({count}):</b>\n",
 
@@ -512,7 +513,7 @@ You can upload a different one via /my_server.
 
 "logs_header": "📋 <b>Event log (last 40):</b>\n",
 
-"logs_entry": "<code>{datetime}</code> {label}\n 👤 {actor}{server}{details}",
+"logs_entry": "<code>{datetime}</code> {label}\n   👤 {actor}{server}{details}",
 
 "logs_truncated": "\n\n<i>...truncated</i>",
 
@@ -558,7 +559,7 @@ Changes will only take effect after being reviewed by an administrator.
 <i>To cancel, click ❌ Cancel or type /cancel</i>
 """,
 
-"log_edit_requested": "@{username} proposed a new value for field "{field}" for server "{name}"",
+"log_edit_requested": "@{username} proposed a new value for field \"{field}\" for server \"{name}\"",
 
 "edit_submitted": """
 📨 <b>Change submitted for moderation!</b>
@@ -577,7 +578,7 @@ After approval by the administrator, the new value will appear on the server car
 Use /admin to check.
 """,
 
-"edit_diff_line": "<b>{field}:</b>\n was: {old}\n now: {new}",
+"edit_diff_line": "<b>{field}:</b>\n  was: {old}\n  now: {new}",
 
 "field_name": "Name",
 
@@ -596,7 +597,7 @@ Use /admin to check.
 
 "edit_already_processed": "Change already processed or missing.",
 
-"edit_approved_edit": "✅ Changes to server <b>"{name}"</b> approved.",
+"edit_approved_edit": "✅ Changes to server <b>\"{name}\"</b> approved.",
 
 "edit_approved_alert": "✅ Changes approved.",
 
@@ -607,7 +608,7 @@ Use /admin to check.
 New data is already showing on the card.
 """,
 
-"edit_rejected_edit": "❌ Server changes <b>"{name}"</b> rejected.",
+"edit_rejected_edit": "❌ Server changes <b>\"{name}\"</b> rejected.",
 
 "edit_rejected_alert": "❌ Changes rejected.",
 
