@@ -59,6 +59,7 @@ TEXTS = {
 🌐 <code>{ip}</code>
 🔑 Password: {pwd_line}
 📶 {status_badge}
+👤 Owner: {owner_line}
 """,
 
 "btn_servers": "🗂 Servers",
@@ -412,7 +413,7 @@ You can now request a password again.
 🖼 <b>New avatar is being moderated!</b>
 
 🖥 Server: <b>{name}</b>
-👤 Owner: <code>{owner_id}</code>
+👤 Owner: {owner_info}
 
 Use /admin to verify.
 """,
@@ -428,7 +429,7 @@ Use /admin to verify.
 📝 {description}
 🌐 <code>{ip}</code>
 🔑 Password: <code>{password}</code>
-👤 Owner: <code>{owner_id}</code>
+👤 Owner: {owner_info}
 🕐 Created: {created_at}
 """,
 
@@ -436,7 +437,7 @@ Use /admin to verify.
 
 "avatar_moderation_caption": """
 🖼 Server Avatar <b>«{name}»</b>
-👤 Owner: <code>{owner_id}</code>
+👤 Owner: {owner_info}
 """,
 
 "avatar_upload_failed": "⚠️ Failed to upload server avatar \"{name}\".",
@@ -571,7 +572,7 @@ After approval by the administrator, the new value will appear on the server car
 ✏️ <b>New edit pending moderation!</b>
 
 🖥 Server: <b>{name}</b>
-👤 Owner: <code>{owner_id}</code>
+👤 Owner: {owner_info}
 
 {diff}
 
@@ -590,7 +591,7 @@ Use /admin to check.
 
 "admin_edit_card": """
 ✏️ <b>Edit for server "{name}"</b>
-👤 Owner: <code>{owner_id}</code>
+👤 Owner: {owner_info}
 
 {diff}
 """,
