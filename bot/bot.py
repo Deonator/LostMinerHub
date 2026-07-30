@@ -257,6 +257,8 @@ def srvlist_keyboard(
     has_password: bool,
     is_private: int,
     is_owner: bool,
+    likes_count: int = 0,
+    liked: bool = False,
 ) -> InlineKeyboardMarkup:
     """Клавиатура для списка серверов: навигация + действия."""
     # Навигационная строка
@@ -278,6 +280,10 @@ def srvlist_keyboard(
         if has_password:
             pwd_label = t("btn_request_password", lang) if is_private else t("btn_view_password", lang)
             rows.append([InlineKeyboardButton(text=pwd_label, callback_data=f"getpwd:{server_id}")])
+
+    # Кнопка лайка — видна всем (владелец получит алерт при нажатии)
+    like_text = f"❤️ {likes_count}" if liked else f"🤍 {likes_count}"
+    rows.append([InlineKeyboardButton(text=like_text, callback_data=f"like:{page}:{server_id}")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -362,8 +368,10 @@ async def _show_server_page(
         owner_info["username"] if owner_info else None,
         owner_info["first_name"] if owner_info else None,
     )
+    likes_count = s["like_count"] if "like_count" in s.keys() else 0
+    liked       = False if is_owner else await db.has_liked(uid, s["id"])
     text = public_server_card(s, page, total, lang, _owner_line)
-    kb   = srvlist_keyboard(lang, page, total, s["id"], subscribed, has_pwd, is_private, is_owner)
+    kb   = srvlist_keyboard(lang, page, total, s["id"], subscribed, has_pwd, is_private, is_owner, likes_count, liked)
 
     if message:
         # Новое сообщение
@@ -515,6 +523,35 @@ async def cb_srvpage(callback: CallbackQuery):
 
     await callback.answer()
     await _show_server_page(callback.from_user.id, servers, page, callback=callback)
+
+
+# ──────────────────────────────────────────
+# Callback: лайк сервера (like:<page>:<server_id>)
+# ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("like:"))
+async def cb_like(callback: CallbackQuery):
+    lang = await db.get_language(callback.from_user.id)
+    parts = callback.data.split(":", 2)
+    page      = int(parts[1])
+    server_id = int(parts[2])
+
+    servers = await db.get_approved_servers()
+    server  = next((s for s in servers if s["id"] == server_id), None)
+    if not server:
+        await callback.answer(t("invalid_data", lang), show_alert=True)
+        return
+
+    if server["owner_id"] == callback.from_user.id:
+        await callback.answer(t("like_own_server", lang), show_alert=True)
+        return
+
+    liked = await db.toggle_like(callback.from_user.id, server_id)
+    await callback.answer(t("like_added", lang) if liked else t("like_removed", lang))
+
+    # Обновляем список после изменения лайка (порядок мог измениться)
+    servers  = await db.get_approved_servers()
+    new_page = next((i for i, s in enumerate(servers) if s["id"] == server_id), page)
+    await _show_server_page(callback.from_user.id, servers, new_page, callback=callback)
 
 
 # ──────────────────────────────────────────
