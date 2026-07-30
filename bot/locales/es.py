@@ -59,6 +59,7 @@ TEXTS = {
 🌐 <code>{ip}</code>
 🔑 Contraseña: {pwd_line}
 📶 {status_badge}
+👤 Propietario: {owner_line}
 """,
 
 "btn_servers": "🗂 Servidores",
@@ -412,7 +413,7 @@ Ahora puedes volver a solicitar la contraseña.
 🖼 <b>¡Nuevo avatar en moderación!</b>
 
 🖥 Servidor: <b>{name}</b>
-👤 Propietario: <code>{owner_id}</code>
+👤 Propietario: {owner_info}
 
 Usa /admin para revisarlo.
 """,
@@ -428,7 +429,7 @@ Usa /admin para revisarlo.
 📝 {description}
 🌐 <code>{ip}</code>
 🔑 Contraseña: <code>{password}</code>
-👤 Propietario: <code>{owner_id}</code>
+👤 Propietario: {owner_info}
 🕐 Creado: {created_at}
 """,
 
@@ -436,7 +437,7 @@ Usa /admin para revisarlo.
 
 "avatar_moderation_caption": """
 🖼 Avatar del servidor <b>«{name}»</b>
-👤 Propietario: <code>{owner_id}</code>
+👤 Propietario: {owner_info}
 """,
 
 "avatar_upload_failed": "⚠️ No se pudo cargar el avatar del servidor «{name}».",
@@ -571,7 +572,7 @@ Una vez aprobado por el administrador, el nuevo valor aparecerá en la ficha del
 ✏️ <b>¡Nueva edición en moderación!</b>
 
 🖥 Servidor: <b>{name}</b>
-👤 Propietario: <code>{owner_id}</code>
+👤 Propietario: {owner_info}
 
 {diff}
 
@@ -590,7 +591,7 @@ Usa /admin para revisarlo.
 
 "admin_edit_card": """
 ✏️ <b>Edición del servidor «{name}»</b>
-👤 Propietario: <code>{owner_id}</code>
+👤 Propietario: {owner_info}
 
 {diff}
 """,
