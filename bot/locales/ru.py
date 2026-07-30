@@ -67,6 +67,7 @@ TEXTS = {
 🌐 <code>{ip}</code>
 🔑 Пароль: {pwd_line}
 📶 {status_badge}
+👤 Владелец: {owner_line}
 """,
 
     # ──────────────────────────────────────────
@@ -472,7 +473,7 @@ TEXTS = {
 🖼 <b>Новая аватарка на модерации!</b>
 
 🖥 Сервер: <b>{name}</b>
-👤 Владелец: <code>{owner_id}</code>
+👤 Владелец: {owner_info}
 
 Используй /админ для проверки.
 """,
@@ -492,7 +493,7 @@ TEXTS = {
 📝 {description}
 🌐 <code>{ip}</code>
 🔑 Пароль: <code>{password}</code>
-👤 Владелец: <code>{owner_id}</code>
+👤 Владелец: {owner_info}
 🕐 Создан: {created_at}
 """,
 
@@ -500,7 +501,7 @@ TEXTS = {
 
     "avatar_moderation_caption": """
 🖼 Аватарка сервера <b>«{name}»</b>
-👤 Владелец: <code>{owner_id}</code>
+👤 Владелец: {owner_info}
 """,
 
     "avatar_upload_failed": "⚠️ Не удалось загрузить аватарку сервера «{name}».",
@@ -663,7 +664,7 @@ TEXTS = {
 ✏️ <b>Новая правка на модерации!</b>
 
 🖥 Сервер: <b>{name}</b>
-👤 Владелец: <code>{owner_id}</code>
+👤 Владелец: {owner_info}
 
 {diff}
 
@@ -682,7 +683,7 @@ TEXTS = {
 
     "admin_edit_card": """
 ✏️ <b>Правка для сервера «{name}»</b>
-👤 Владелец: <code>{owner_id}</code>
+👤 Владелец: {owner_info}
 
 {diff}
 """,
