@@ -122,6 +122,14 @@ class GlobalBanMiddleware(BaseMiddleware):
 # ──────────────────────────────────────────
 # Утилиты
 # ──────────────────────────────────────────
+def user_link(user_id: int, username: str | None, first_name: str | None) -> str:
+    """@username или имя/ID со ссылкой tg://openmessage."""
+    if username:
+        return f"@{html.escape(username)}"
+    display = html.escape(first_name) if first_name else str(user_id)
+    return f'<a href="tg://openmessage?user_id={user_id}">{display}</a>'
+
+
 def e(text: str) -> str:
     return html.escape(str(text))
 
@@ -201,7 +209,7 @@ def server_card(s, lang: str) -> str:
     )
 
 
-def public_server_card(s, page: int, total: int, lang: str) -> str:
+def public_server_card(s, page: int, total: int, lang: str, owner_line: str = "") -> str:
     """Публичная карточка сервера (пароль скрыт) + счётчик страниц."""
     is_private = s["is_private"] if "is_private" in s.keys() else 0
     if is_private:
@@ -217,6 +225,7 @@ def public_server_card(s, page: int, total: int, lang: str) -> str:
         ip=e(s['ip']),
         pwd_line=pwd_line,
         status_badge=status_badge(s['online'], lang),
+        owner_line=owner_line,
     )
 
 
@@ -347,7 +356,13 @@ async def _show_server_page(
     has_pwd    = bool(s["password"])
     avatar_fid = s["avatar_file_id"] if "avatar_file_id" in s.keys() else None
 
-    text = public_server_card(s, page, total, lang)
+    owner_info   = await db.get_user_info(s["owner_id"])
+    _owner_line  = user_link(
+        s["owner_id"],
+        owner_info["username"] if owner_info else None,
+        owner_info["first_name"] if owner_info else None,
+    )
+    text = public_server_card(s, page, total, lang, _owner_line)
     kb   = srvlist_keyboard(lang, page, total, s["id"], subscribed, has_pwd, is_private, is_owner)
 
     if message:
@@ -411,7 +426,8 @@ async def cmd_start(message: Message, state: FSMContext):
 
     await db.register_user(
         message.from_user.id,
-        message.from_user.username
+        message.from_user.username,
+        message.from_user.first_name,
     )
 
     # Получаем язык пользователя
@@ -454,7 +470,7 @@ async def cmd_start(message: Message, state: FSMContext):
         + "\n<i>"
         + t("buttons_hint", lang)
         + "</i>",
-        
+
         parse_mode="HTML",
         reply_markup=main_keyboard(lang, is_admin),
     )
@@ -726,7 +742,7 @@ async def cb_pwd_request(callback: CallbackQuery):
 # ──────────────────────────────────────────
 async def _cmd_create_logic(message: Message, state: FSMContext):
     lang = await db.get_language(message.from_user.id)
-    await db.register_user(message.from_user.id, message.from_user.username)
+    await db.register_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
 
     existing = await db.get_active_server_by_owner(message.from_user.id)
     if existing:
@@ -1186,11 +1202,12 @@ async def edit_server_step(message: Message, state: FSMContext):
         old=e(old_value),
         new=e(new_value),
     )
+    _oi_edit = await db.get_user_info(server['owner_id'])
     await notify_user(
         ADMIN_ID,
         t("admin_new_edit", admin_lang).strip().format(
             name=e(server['name']),
-            owner_id=server['owner_id'],
+            owner_info=f"<code>{server['owner_id']}</code>  {user_link(server['owner_id'], _oi_edit['username'] if _oi_edit else None, _oi_edit['first_name'] if _oi_edit else None)}",
             diff=diff,
         ),
     )
@@ -1386,10 +1403,10 @@ async def change_avatar_step(message: Message, state: FSMContext):
         await bot.send_photo(
             ADMIN_ID,
             file_id,
-            caption=t("admin_new_avatar", admin_lang).strip().format(
+            caption=(lambda _oi: t("admin_new_avatar", admin_lang).strip().format(
                 name=e(server['name']),
-                owner_id=server['owner_id'],
-            ),
+                owner_info=f"<code>{server['owner_id']}</code>  {user_link(server['owner_id'], _oi['username'] if _oi else None, _oi['first_name'] if _oi else None)}",
+            ))(await db.get_user_info(server['owner_id'])),
             parse_mode="HTML",
         )
     except Exception as exc:
@@ -1420,12 +1437,14 @@ async def _cmd_admin_logic(message: Message):
             t("pending_servers_count", lang).format(count=len(pending_servers)), parse_mode="HTML"
         )
         for s in pending_servers:
+            _oi = await db.get_user_info(s['owner_id'])
+            _ol = user_link(s['owner_id'], _oi["username"] if _oi else None, _oi["first_name"] if _oi else None)
             text = t("admin_server_card", lang).strip().format(
                 name=e(s['name']),
                 description=e(s['description']),
                 ip=e(s['ip']),
                 password=e(s['password']) if s['password'] else t("value_none", lang),
-                owner_id=s['owner_id'],
+                owner_info=f"<code>{s['owner_id']}</code>  {_ol}",
                 created_at=s['created_at'],
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -1448,10 +1467,10 @@ async def _cmd_admin_logic(message: Message):
                 await bot.send_photo(
                     message.chat.id,
                     s["avatar_pending_file_id"],
-                    caption=t("avatar_moderation_caption", lang).strip().format(
+                    caption=(lambda _oi: t("avatar_moderation_caption", lang).strip().format(
                         name=e(s['name']),
-                        owner_id=s['owner_id'],
-                    ),
+                        owner_info=f"<code>{s['owner_id']}</code>  {user_link(s['owner_id'], _oi['username'] if _oi else None, _oi['first_name'] if _oi else None)}",
+                    ))(await db.get_user_info(s['owner_id'])),
                     parse_mode="HTML",
                     reply_markup=kb,
                 )
@@ -1477,9 +1496,11 @@ async def _cmd_admin_logic(message: Message):
                         old=e(s[field]),
                         new=e(pending_value),
                     ))
+            _oi2 = await db.get_user_info(s['owner_id'])
+            _ol2 = user_link(s['owner_id'], _oi2["username"] if _oi2 else None, _oi2["first_name"] if _oi2 else None)
             text = t("admin_edit_card", lang).strip().format(
                 name=e(s['name']),
-                owner_id=s['owner_id'],
+                owner_info=f"<code>{s['owner_id']}</code>  {_ol2}",
                 diff="\n\n".join(diff_lines),
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -2036,4 +2057,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
