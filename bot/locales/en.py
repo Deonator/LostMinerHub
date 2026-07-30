@@ -80,6 +80,12 @@ TEXTS = {
 
 "btn_banlist": "📋 Ban List",
 
+"like_own_server": "❌ You can't like your own server",
+
+"like_added": "❤️ Liked!",
+
+"like_removed": "💔 Like removed",
+
 "nav_prev": "◀️",
 
 "nav_next": "▶️",
