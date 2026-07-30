@@ -716,7 +716,8 @@ async def get_global_bans() -> list:
 LOG_LABELS = {
     "server_created":           "📝 Сервер создан",
     "server_approved":          "✅ Сервер одобрен",
-    "server_reject🚫 Серверный бан",
+    "server_rejected":          "❌ Сервер отклонён",
+    "server_ban":               "🚫 Серверный бан",
     "server_unban":             "✅ Серверный разбан",
     "global_ban":               "🚫 Глобальный бан",
     "global_unban":             "✅ Глобальный разбан",
@@ -778,19 +779,4 @@ async def get_server_by_name(name: str):
             "SELECT * FROM servers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))",
             (name,),
         ) as cursor:
-            return await cursor.fetchone()ed":          "❌ Сервер отклонён",
-    "server_deleted":           "🗑 Сервер удалён",
-    "server_online":            "🟢 Сервер включён",
-    "server_offline":           "⚫ Сервер выключен",
-    "server_type_changed":      "🔒 Тип сервера изменён",
-    "password_changed":         "🔑 Пароль изменён",
-    "password_requested":       "🔐 Пароль запрошен (открытый)",
-    "pwd_request_sent":         "📨 Запрос пароля отправлен",
-    "pwd_request_approved":     "✅ Запрос пароля одобрен",
-    "pwd_request_rejected":     "❌ Запрос пароля отклонён",
-    "subscribed":               "🔔 Подписка",
-    "unsubscribed":             "🔕 Отписка",
-    "avatar_uploaded":          "🖼 Аватарка загружена",
-    "avatar_approved":          "✅ Аватарка одобрена",
-    "avatar_rejected":          "❌ Аватарка отклонена",
-    "server_ban":               "
+            return await cursor.fetchone()
