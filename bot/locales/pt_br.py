@@ -59,6 +59,7 @@ TEXTS = {
 🌐 <code>{ip}</code>
 🔑 Senha: {pwd_line}
 📶 {status_badge}
+👤 Dono: {owner_line}
 """,
 
 "btn_servers": "🗂 Servidores",
@@ -412,7 +413,7 @@ Agora você pode solicitar a senha novamente.
 🖼 <b>Novo avatar em moderação!</b>
 
 🖥 Servidor: <b>{name}</b>
-👤 Dono: <code>{owner_id}</code>
+👤 Dono: {owner_info}
 
 Use /admin para revisar.
 """,
@@ -428,7 +429,7 @@ Use /admin para revisar.
 📝 {description}
 🌐 <code>{ip}</code>
 🔑 Senha: <code>{password}</code>
-👤 Dono: <code>{owner_id}</code>
+👤 Dono: {owner_info}
 🕐 Criado em: {created_at}
 """,
 
@@ -436,7 +437,7 @@ Use /admin para revisar.
 
 "avatar_moderation_caption": """
 🖼 Avatar do servidor <b>«{name}»</b>
-👤 Dono: <code>{owner_id}</code>
+👤 Dono: {owner_info}
 """,
 
 "avatar_upload_failed": "⚠️ Não foi possível carregar o avatar do servidor «{name}».",
@@ -571,7 +572,7 @@ Após a aprovação do administrador, o novo valor aparecerá na ficha do servid
 ✏️ <b>Nova edição em moderação!</b>
 
 🖥 Servidor: <b>{name}</b>
-👤 Dono: <code>{owner_id}</code>
+👤 Dono: {owner_info}
 
 {diff}
 
@@ -590,7 +591,7 @@ Use /admin para revisar.
 
 "admin_edit_card": """
 ✏️ <b>Edição do servidor «{name}»</b>
-👤 Dono: <code>{owner_id}</code>
+👤 Dono: {owner_info}
 
 {diff}
 """,
