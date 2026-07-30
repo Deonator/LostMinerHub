@@ -91,6 +91,17 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS server_likes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                server_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, server_id),
+                FOREIGN KEY (user_id) REFERENCES users(telegram_id),
+                FOREIGN KEY (server_id) REFERENCES servers(id)
+            )
+        """)
         await db.commit()
         mark_backup()
         # Миграции: добавляем колонки если их ещё нет
@@ -225,7 +236,12 @@ async def get_approved_servers():
 
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM servers WHERE status = 'approved' ORDER BY online DESC, created_at DESC"
+            """SELECT s.*, COUNT(l.id) AS like_count
+               FROM servers s
+               LEFT JOIN server_likes l ON l.server_id = s.id
+               WHERE s.status = 'approved'
+               GROUP BY s.id
+               ORDER BY s.online DESC, like_count DESC, s.created_at DESC"""
         ) as cursor:
             return await cursor.fetchall()
 
@@ -709,6 +725,44 @@ async def get_global_bans() -> list:
             "SELECT * FROM bot_bans ORDER BY created_at DESC"
         ) as cur:
             return await cur.fetchall()
+
+
+# ── Лайки ─────────────────────────────────────────────────────────────────────
+
+async def toggle_like(user_id: int, server_id: int) -> bool:
+    """Ставит или снимает лайк. Возвращает True если лайк поставлен, False если снят."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        async with db.execute(
+            "SELECT id FROM server_likes WHERE user_id = ? AND server_id = ?",
+            (user_id, server_id),
+        ) as cur:
+            row = await cur.fetchone()
+        if row:
+            await db.execute(
+                "DELETE FROM server_likes WHERE user_id = ? AND server_id = ?",
+                (user_id, server_id),
+            )
+            await db.commit()
+            mark_backup()
+            return False
+        else:
+            await db.execute(
+                "INSERT INTO server_likes (user_id, server_id) VALUES (?, ?)",
+                (user_id, server_id),
+            )
+            await db.commit()
+            mark_backup()
+            return True
+
+
+async def has_liked(user_id: int, server_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        async with db.execute(
+            "SELECT id FROM server_likes WHERE user_id = ? AND server_id = ?",
+            (user_id, server_id),
+        ) as cur:
+            return await cur.fetchone() is not None
 
 
 # ── Логи ──────────────────────────────────────────────────────────────────────
