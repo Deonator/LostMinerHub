@@ -115,20 +115,41 @@ async def init_db():
             await db.commit()
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
+            await db.commit()
+        except Exception:
+            pass
 
 
 # ── Пользователи ──────────────────────────────────────────────────────────────
 
-async def register_user(telegram_id: int, username: str | None):
+async def register_user(telegram_id: int, username: str | None, first_name: str | None = None):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute(
-            "INSERT OR IGNORE INTO users (telegram_id, username) VALUES (?, ?)",
-            (telegram_id, username),
+            """INSERT INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)
+               ON CONFLICT(telegram_id) DO UPDATE SET
+                   username=excluded.username,
+                   first_name=excluded.first_name""",
+            (telegram_id, username, first_name),
         )
         await db.commit()
         mark_backup()
-        
+
+
+async def get_user_info(telegram_id: int) -> dict | None:
+    """Возвращает {username, first_name} или None если пользователь не найден."""
+    async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT username, first_name FROM users WHERE telegram_id = ?", (telegram_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
 async def get_user(telegram_id: int):
     async with aiosqlite.connect(DB_PATH, **CONNECT_KWARGS) as db:
         await db.execute("PRAGMA journal_mode=WAL")
@@ -200,7 +221,7 @@ async def get_approved_servers():
                  AND expires_at <= datetime('now')"""
         )
         await db.commit()
-        
+
 
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -249,7 +270,7 @@ async def toggle_server_private(server_id: int) -> int:
             "UPDATE servers SET is_private = CASE WHEN is_private = 1 THEN 0 ELSE 1 END WHERE id = ?",
             (server_id,),
         )
-        
+
         await db.commit()
         mark_backup()
         db.row_factory = aiosqlite.Row
@@ -695,22 +716,7 @@ async def get_global_bans() -> list:
 LOG_LABELS = {
     "server_created":           "📝 Сервер создан",
     "server_approved":          "✅ Сервер одобрен",
-    "server_rejected":          "❌ Сервер отклонён",
-    "server_deleted":           "🗑 Сервер удалён",
-    "server_online":            "🟢 Сервер включён",
-    "server_offline":           "⚫ Сервер выключен",
-    "server_type_changed":      "🔒 Тип сервера изменён",
-    "password_changed":         "🔑 Пароль изменён",
-    "password_requested":       "🔐 Пароль запрошен (открытый)",
-    "pwd_request_sent":         "📨 Запрос пароля отправлен",
-    "pwd_request_approved":     "✅ Запрос пароля одобрен",
-    "pwd_request_rejected":     "❌ Запрос пароля отклонён",
-    "subscribed":               "🔔 Подписка",
-    "unsubscribed":             "🔕 Отписка",
-    "avatar_uploaded":          "🖼 Аватарка загружена",
-    "avatar_approved":          "✅ Аватарка одобрена",
-    "avatar_rejected":          "❌ Аватарка отклонена",
-    "server_ban":               "🚫 Серверный бан",
+    "server_reject🚫 Серверный бан",
     "server_unban":             "✅ Серверный разбан",
     "global_ban":               "🚫 Глобальный бан",
     "global_unban":             "✅ Глобальный разбан",
@@ -772,4 +778,19 @@ async def get_server_by_name(name: str):
             "SELECT * FROM servers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))",
             (name,),
         ) as cursor:
-            return await cursor.fetchone()
+            return await cursor.fetchone()ed":          "❌ Сервер отклонён",
+    "server_deleted":           "🗑 Сервер удалён",
+    "server_online":            "🟢 Сервер включён",
+    "server_offline":           "⚫ Сервер выключен",
+    "server_type_changed":      "🔒 Тип сервера изменён",
+    "password_changed":         "🔑 Пароль изменён",
+    "password_requested":       "🔐 Пароль запрошен (открытый)",
+    "pwd_request_sent":         "📨 Запрос пароля отправлен",
+    "pwd_request_approved":     "✅ Запрос пароля одобрен",
+    "pwd_request_rejected":     "❌ Запрос пароля отклонён",
+    "subscribed":               "🔔 Подписка",
+    "unsubscribed":             "🔕 Отписка",
+    "avatar_uploaded":          "🖼 Аватарка загружена",
+    "avatar_approved":          "✅ Аватарка одобрена",
+    "avatar_rejected":          "❌ Аватарка отклонена",
+    "server_ban":               "
