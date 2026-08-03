@@ -33,49 +33,59 @@ from backup import (
     backup_loop
 )
 import random
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message
-from aiogram.filters import Command
 
 router = Router()
 
-# Шансы качества
-QUALITY_CHANCES = [
-    (10, 1.0),
-    (20, 3.0),
-    (30, 8.0),
-    (40, 18.0),
-    (50, 40.0),
-    (60, 18.0),
-    (70, 8.0),
-    (80, 3.0),
-    (90, 0.9),
-    (100, 0.1),
-]
-
-qualities = [q for q, _ in QUALITY_CHANCES]
-weights = [w for _, w in QUALITY_CHANCES]
+QUALITY_CHANCES = {
+    10: 1.0,
+    20: 3.0,
+    30: 8.0,
+    40: 18.0,
+    50: 40.0,
+    60: 18.0,
+    70: 8.0,
+    80: 3.0,
+    90: 0.9,
+    100: 0.1,
+}
 
 
-@router.message(Command("шахта"))
-async def mine_quality(message: Message):
-    try:
-        amount = int(message.text.split()[1])
-    except:
-        await message.answer("Использование:\n/шахта 10")
+@router.message(F.text)
+async def mine_command(message: Message):
+    text = message.text.lower().strip()
+
+    if not text.startswith("шахта "):
         return
+
+    parts = text.split()
+
+    if len(parts) != 2:
+        await message.answer("Использование:\nшахта 10")
+        return
+
+    if not parts[1].isdigit():
+        await message.answer("После слова 'шахта' должно быть число.")
+        return
+
+    amount = int(parts[1])
+
+    qualities = list(QUALITY_CHANCES.keys())
+    weights = list(QUALITY_CHANCES.values())
 
     result = {}
 
     for _ in range(amount):
-        q = random.choices(qualities, weights=weights)[0]
-        result[q] = result.get(q, 0) + 1
+        quality = random.choices(qualities, weights=weights)[0]
+        result[quality] = result.get(quality, 0) + 1
 
-    text = f"⛏ Добыто ресурсов: {amount}\n\n"
+    response = f"⛏ Добыто ресурсов: {amount}\n\n"
 
     for q in sorted(result):
-        text += f"{q}% — {result[q]} шт.\n"
+        response += f"{q}% — {result[q]} шт.\n"
 
+    await message.answer(response)
     await message.answer(text)
 async def health(request):
     return web.Response(text="Bot is alive")
