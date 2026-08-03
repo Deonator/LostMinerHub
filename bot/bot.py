@@ -36,7 +36,8 @@ import random
 from aiogram import Router, F
 from aiogram.types import Message
 
-
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 
 QUALITY_CHANCES = {
     10: 1.0,
@@ -111,8 +112,7 @@ async def start_web():
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+
 dp.include_router(router)
 
 # ──────────────────────────────────────────
