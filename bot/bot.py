@@ -52,7 +52,7 @@ QUALITY_CHANCES = {
 }
 
 
-@router.message(F.text)
+@dp.message(F.text)
 async def mine_command(message: Message):
     text = message.text.lower().strip()
 
