@@ -32,7 +32,51 @@ from backup import (
     download_backup,
     backup_loop
 )
+import random
+from aiogram import Router
+from aiogram.types import Message
+from aiogram.filters import Command
 
+router = Router()
+
+# Шансы качества
+QUALITY_CHANCES = [
+    (10, 1.0),
+    (20, 3.0),
+    (30, 8.0),
+    (40, 18.0),
+    (50, 40.0),
+    (60, 18.0),
+    (70, 8.0),
+    (80, 3.0),
+    (90, 0.9),
+    (100, 0.1),
+]
+
+qualities = [q for q, _ in QUALITY_CHANCES]
+weights = [w for _, w in QUALITY_CHANCES]
+
+
+@router.message(Command("шахта"))
+async def mine_quality(message: Message):
+    try:
+        amount = int(message.text.split()[1])
+    except:
+        await message.answer("Использование:\n/шахта 10")
+        return
+
+    result = {}
+
+    for _ in range(amount):
+        q = random.choices(qualities, weights=weights)[0]
+        result[q] = result.get(q, 0) + 1
+
+    text = f"⛏ Добыто ресурсов: {amount}\n\n"
+
+    for q in sorted(result):
+        text += f"{q}% — {result[q]} шт.\n"
+
+    await message.answer(text)
 async def health(request):
     return web.Response(text="Bot is alive")
 
