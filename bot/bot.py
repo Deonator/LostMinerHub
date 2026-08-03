@@ -36,7 +36,7 @@ import random
 from aiogram import Router, F
 from aiogram.types import Message
 
-router = Router()
+
 
 QUALITY_CHANCES = {
     10: 1.0,
@@ -113,7 +113,7 @@ logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
+dp.include_router(router)
 
 # ──────────────────────────────────────────
 # FSM
