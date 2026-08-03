@@ -53,7 +53,7 @@ QUALITY_CHANCES = {
 }
 
 
-@dp.message(F.text)
+@dp.message(F.text.startswith("шахта"))
 async def mine_command(message: Message):
 
     if message.from_user.id != 7572151869:
